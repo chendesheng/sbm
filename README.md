@@ -34,6 +34,11 @@ sbm status                       # Version, PID/state, boot setting, config/log 
 sbm pause                        # Stop now; preserve the boot setting
 sbm enable                       # Enable boot startup; do not start now
 sbm disable                      # Disable boot startup; do not pause now
+sbm config route list [--priority]
+sbm config route add --ip 192.0.2.1 --outbound direct
+sbm config route add --domain example.com --outbound direct
+sbm config route add --domain_suffix example.com --outbound direct
+sbm config route remove --ip 192.0.2.1 --outbound direct
 ```
 
 Commands that access protected state request `sudo` when needed. For `install` and `upgrade`, release lookup, curl download, checksum verification, and executable-version verification happen as your normal user **before** requesting sudo. Progress messages identify each stage; curl uses its default progress display. Run these commands without a `sudo` prefix to keep downloads unprivileged. Cancelling the sudo prompt exits unsuccessfully without performing the requested operation. `--help` and `--version` require no privileges. Boot startup defaults to disabled. There is no `stop` or `logs` command.
@@ -45,6 +50,12 @@ Commands that access protected state request `sudo` when needed. For `install` a
 `install` and `upgrade` look up the same official release through GitHub's API, download the native macOS archive using system curl with its default progress display, verify its published SHA-256 digest and reported core version, and check the saved configuration before replacing the core. Releases without a published SHA-256 digest are rejected. The same installed version leaves the service and installed files unchanged. Release metadata is checked each time, but a checksum-valid cached archive is reused without downloading the binary again. A running service is restarted after replacement; a paused service stays paused. Failed activation restores the previous binary and active state. Downloads and validation occur before pausing the old core. After sudo, installation rechecks a private snapshot of the archive and validates the saved configuration before replacing anything. Cancelling sudo removes the temporary handoff files and leaves managed state unchanged; the verified archive stays cached for the next attempt. Network/API rate-limit failures leave the installation unchanged. No GitHub token is required or read.
 
 Concurrent mutating commands wait for a filesystem lock for up to 30 seconds. After an abrupt CLI termination, the error identifies the lock directory and its `pid` file; confirm no sbm operation is still running before removing a stale lock.
+
+## Managed direct routes
+
+`sbm config route` manages two sing-box source-format JSON files: `direct.json` and `direct-priority.json` under `/Library/Application Support/sbm/`. The applied sing-box configuration must define local rule sets referring to these files and route them to `direct` in the desired order. Provision both files and apply that configuration before using these commands; sbm does not automatically rewrite arbitrary routing configurations. Lists are independent: use `--priority` to select the high-priority file. The `--outbound` option currently accepts only `direct`.
+
+`--domain` is an exact match, `--domain_suffix` matches the domain and subdomains, and `--ip` accepts an IP address or CIDR. Each add or remove takes exactly one match option. Addresses without a prefix become `/32` or `/128`. Duplicate additions are no-ops; removing a missing entry reports an error. Commands serialize changes and atomically replace the selected file with private permissions. sing-box reloads local rule sets when modified; no service restart is issued. A paused service uses the saved lists on its next start. Installing or applying the main configuration and its rule-set references is a separate operation.
 
 ## Download cache
 

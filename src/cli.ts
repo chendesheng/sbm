@@ -5,6 +5,7 @@ import { Paths, run, exists, withLock } from './system';
 import { Service, errorMessage } from './service';
 import { install, releaseEndpoint, withPreparedInstall, activatePreparedInstall } from './install';
 import { statusCacheRoot, cacheSize, formatCacheSize } from './cache';
+import { manageRoute } from './routes';
 
 async function elevate(argv: string[]): Promise<number> {
   const invocation = Bun.main.startsWith('/$bunfs/') ? [process.execPath] : [process.execPath, Bun.main];
@@ -44,6 +45,7 @@ async function main(): Promise<number> {
   // A missing core can be reported without elevation or creating managed files.
   if (args.command === 'start' && !await exists(paths.base)) throw new Error('sing-box is not installed. Run sbm install first.');
   if (process.getuid?.() !== 0 && !(args.command === 'status' && !await exists(paths.base))) {
+    if (args.command === 'config') return elevate(raw);
     const argv: string[] = [args.command];
     if (args.value) argv.push(args.command === 'start' ? '--config' : '--version', args.value);
     return elevate(argv);
@@ -77,6 +79,7 @@ async function main(): Promise<number> {
       case 'pause': await service.pause(); console.log('sing-box paused. Boot setting preserved.'); break;
       case 'enable': await service.enable(); console.log('Boot startup enabled. Current running state unchanged.'); break;
       case 'disable': await service.disable(); console.log('Boot startup disabled. Current running state unchanged.'); break;
+      case 'config': console.log(await manageRoute(paths, args.route!)); break;
     }
   });
   return 0;
