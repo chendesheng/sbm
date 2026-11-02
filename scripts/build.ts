@@ -1,11 +1,10 @@
-import { exists, run } from '../src/system';
-import { resolve } from 'node:path';
+import { run } from '../src/system';
 import { mkdir } from 'node:fs/promises';
 
-const compiler = await exists('.tools/bun') ? resolve('.tools/bun') : process.execPath;
+const compiler = process.execPath;
 const capability = await run([compiler, 'compile', '--help']);
 if (capability.code !== 0 || !capability.stdout.includes('--no-aot')) {
-  console.error('This Bun does not support native AOT. Run bun run setup:compiler first. No bundled-runtime fallback is produced.');
+  console.error('The installed Bun does not support native AOT. Install an AOT-enabled Bun version, then run bun run build again.');
   process.exit(1);
 }
 await mkdir('dist', { recursive: true });

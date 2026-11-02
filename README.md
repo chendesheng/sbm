@@ -4,11 +4,10 @@ A small macOS command-line manager for [sing-box](https://github.com/SagerNet/si
 
 ## Build and install the CLI
 
-Install Bun through your preferred package manager, then:
+Install a Bun version that supports native AOT (`bun compile`), then:
 
 ```sh
 bun install --frozen-lockfile
-bun run setup:compiler
 bun run typecheck
 bun test
 bun run build
@@ -19,11 +18,9 @@ The compiled executable does not require Bun on the target machine. Builds are n
 
 ### Native AOT toolchain
 
-Verified on 2026-11-02 with Homebrew Bun **1.4.4**, TypeScript **5.9.3**, and native AOT compiler **1.4.4-canary.1+3f3a9ff87** on macOS arm64. The stable Bun 1.4.4 executable did **not** expose the `bun compile` command documented at <https://bun.com/docs/compiler/aot>; merely passing `--aot` to its older build command did not establish AOT support.
+`bun run build` uses the installed Bun executable and invokes `bun compile --trim`. It checks for native AOT support first and reports a clear error if unavailable. It does not download or manage a separate compiler. See the [Bun AOT documentation](https://bun.com/docs/compiler/aot) for toolchain requirements. Native AOT is experimental.
 
-`setup:compiler` downloads the current official Bun canary using the system curl with its default progress display, verifies the archive against GitHub's published SHA-256 digest, checks for native AOT support, and stores it in ignored `.tools/bun`. The exact revision, digest, and download URL are recorded in `.tools/compiler.json`. Canary changes over time; preserve that executable and metadata separately if you need to reproduce an exact compiler revision. Running setup again explicitly refreshes the compiler. Stable Bun remains installed globally.
-
-`build` uses the local compiler when present and invokes `bun compile --trim`. It rejects a compiler without AOT support and never silently falls back to a bundled JavaScript runtime. Native AOT is experimental.
+The initial build was verified on macOS arm64 with Bun **1.4.4-canary.1+3f3a9ff87** and TypeScript **5.9.3**. Stable Bun **1.4.4** did not expose `bun compile` when checked on 2026-11-02.
 
 ## Commands
 

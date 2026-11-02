@@ -1,6 +1,5 @@
 node_modules/
 dist/
-.tools/
 .*.bun-build
 local/
 *.log

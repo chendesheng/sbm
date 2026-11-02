@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "bun src/cli.ts",
     "build": "bun scripts/build.ts",
-    "setup:compiler": "bun scripts/setup-compiler.ts",
     "smoke:launchd": "bun scripts/smoke-launchd.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
