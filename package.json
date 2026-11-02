@@ -1,0 +1,15 @@
+{
+  "name": "sbm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun src/cli.ts",
+    "build": "bun scripts/build.ts",
+    "setup:compiler": "bun scripts/setup-compiler.ts",
+    "smoke:launchd": "bun scripts/smoke-launchd.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": { "@types/bun": "1.4.4", "typescript": "~5.9.3" }
+}
