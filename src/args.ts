@@ -10,6 +10,8 @@ Usage:
   sbm disable                      Disable boot startup; do not pause now
   sbm config route list [--priority]
   sbm config route add|remove --outbound direct (--ip <address>|--domain <name>|--domain_suffix <name>) [--priority]
+  sbm config backup --file <file.zip>   Back up managed configuration and assets
+  sbm config restore --file <file.zip>  Restore a configuration backup
   sbm --help
   sbm --version
 
@@ -17,12 +19,16 @@ start never installs a core. Run sbm install first.
 `;
 export type Command = 'install' | 'start' | 'pause' | 'status' | 'enable' | 'disable' | 'help' | 'version' | 'config';
 export type RouteArgs = { action: 'list' | 'add' | 'remove'; priority: boolean; field?: 'ip_cidr' | 'domain' | 'domain_suffix'; value?: string; outbound?: string };
-export type Args = { command: Command; value?: string; route?: RouteArgs };
+export type Args = { command: Command; value?: string; route?: RouteArgs; configAction?: 'backup' | 'restore' };
 export function parseArgs(args: string[]): Args {
   if (!args.length || args.length === 1 && ['--help', '-h', 'help'].includes(args[0])) return { command: 'help' };
   if (args.length === 1 && args[0] === '--version') return { command: 'version' };
   if (args[0] === 'config') {
     if (args.length === 2 && ['--help', '-h'].includes(args[1])) return { command: 'help' };
+    if (['backup', 'restore'].includes(args[1])) {
+      if (args.length !== 4 || args[2] !== '--file' || !args[3] || args[3].startsWith('--')) throw new Error('Expected --file <file.zip>. Run sbm --help.');
+      return { command: 'config', configAction: args[1] as 'backup' | 'restore', value: args[3] };
+    }
     const action = args[2];
     if (args[1] !== 'route' || !['list', 'add', 'remove'].includes(action)) throw new Error('Invalid config route command. Run sbm --help.');
     const route: RouteArgs = { action: action as RouteArgs['action'], priority: false };

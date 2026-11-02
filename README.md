@@ -39,6 +39,8 @@ sbm config route add --ip 192.0.2.1 --outbound direct
 sbm config route add --domain example.com --outbound direct
 sbm config route add --domain_suffix example.com --outbound direct
 sbm config route remove --ip 192.0.2.1 --outbound direct
+sbm config backup --file /path/to/sbm-backup.zip
+sbm config restore --file /path/to/sbm-backup.zip
 ```
 
 Commands that access protected state request `sudo` when needed. For `install` and `upgrade`, release lookup, curl download, checksum verification, and executable-version verification happen as your normal user **before** requesting sudo. Progress messages identify each stage; curl uses its default progress display. Run these commands without a `sudo` prefix to keep downloads unprivileged. Cancelling the sudo prompt exits unsuccessfully without performing the requested operation. `--help` and `--version` require no privileges. Boot startup defaults to disabled. There is no `stop` or `logs` command.
@@ -83,6 +85,14 @@ The system service label is `io.github.chendesheng.sbm.sing-box`. Boot registrat
 [`examples/config.json`](examples/config.json) is a credential-free, loopback-only mixed proxy with direct outbound on port 19878. It is useful for checking service operation and does not configure a VPN or your private network. A valid configuration and stable process do not prove remote destinations, DNS, TUN routing, or private peers work.
 
 Do not activate competing TUN configurations concurrently. sbm does not stop v2rayN, alter system-proxy settings, migrate identities, or change your VPS.
+
+## Configuration backup and restore
+
+`sbm config backup --file /path/to/backup.zip` creates one ZIP containing the saved configuration, its previous copy if present, managed route lists, other regular files under the managed directory, and the boot-startup setting. The ZIP contains credentials in plaintext and is created with mode `0600`; keep it somewhere private. An existing output file is not overwritten. The core binary, generated service definition, logs, download cache and default runtime `cache.db` are not included. Remote rule-set data can be downloaded again.
+
+The backup checks local rule-set paths and TLS key/certificate path fields in the active plain-JSON configuration. Referenced files must exist under `/Library/Application Support/sbm/`; an external or missing referenced file causes backup to fail rather than silently producing an incomplete archive. Other types of external dependencies are not automatically discovered. Move required assets into the managed directory and update their paths before backing up. The core must be installed separately on the restore machine, and the restored configuration must be compatible with its version.
+
+`sbm config restore --file /path/to/backup.zip` validates archive members, file checksums and the configuration before completing. It restores the archived managed files and boot-startup setting, while retaining whether the service was running or paused. A running service is restarted once. Other existing files that are not in the archive are left in place. If validation or activation fails, sbm attempts to restore the prior files, boot setting and service state. Restore does not change the source file originally supplied to `sbm start --config`.
 
 ## Restore and rollback
 

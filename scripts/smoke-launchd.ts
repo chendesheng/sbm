@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { Paths, run } from '../src/system';
 import { Service } from '../src/service';
 import { install } from '../src/install';
+import { backupConfig, restoreConfig } from '../src/backup';
 
 if (process.platform !== 'darwin' || process.getuid?.() === 0) throw new Error('Run this smoke test as your logged-in macOS user.');
 const base = await mkdtemp(join(tmpdir(), 'sbm-live-'));
@@ -21,17 +22,31 @@ try {
   const source = join(base, 'input.json');
   const config = JSON.parse(await readFile(resolve('examples/config.json'), 'utf8'));
   config.inbounds[0].listen_port = port;
+  const rulePath = join(paths.base, 'direct.json');
+  await Bun.write(rulePath, JSON.stringify({ version: 1, rules: [{ domain: ['example.com'] }] }));
+  config.route.rule_set = [{ type: 'local', tag: 'smoke', format: 'source', path: rulePath }];
   await Bun.write(source, JSON.stringify(config));
   console.log(await service.start(source));
   const pid = (await service.state()).pid;
   if (!pid || !(await service.start()).includes('already running') || (await service.state()).pid !== pid) throw new Error('Repeated start changed the process.');
   const proxied = await run(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '5', '--noproxy', '', '--socks5-hostname', `127.0.0.1:${port}`, `http://127.0.0.1:${target.port}`]);
   if (proxied.code !== 0 || proxied.stdout !== 'sbm smoke ok') throw new Error(`Loopback proxy failed: ${proxied.stderr}`);
+  const backup = join(base, 'backup.zip');
+  console.log(await backupConfig(paths, backup));
+  await Bun.write(rulePath, JSON.stringify({ version: 1, rules: [] }));
+  console.log(await restoreConfig(service, backup));
+  if (!(await service.state()).pid || !JSON.parse(await readFile(rulePath, 'utf8')).rules.length) throw new Error('Running restore failed.');
+  const restored = await run(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '5', '--noproxy', '', '--socks5-hostname', `127.0.0.1:${port}`, `http://127.0.0.1:${target.port}`]);
+  if (restored.code !== 0 || restored.stdout !== 'sbm smoke ok') throw new Error(`Restored proxy failed: ${restored.stderr}`);
+  await service.pause();
+  console.log(await restoreConfig(service, backup));
+  if ((await service.state()).loaded) throw new Error('Paused restore unexpectedly started the job.');
+  await service.start();
   await service.enable(); await service.pause(); await service.pause();
   if ((await service.state()).loaded) throw new Error('Pause did not unload the job.');
   console.log(await service.start()); await service.disable();
   console.log(await install(service));
-  console.log(`PASS: official core, real launchd, repeated start/pause, loopback SOCKS traffic, boot-file enable/disable, idempotent install. Logs: ${paths.stderr}`);
+  console.log(`PASS: official core, real launchd, running/paused backup restore, repeated start/pause, loopback SOCKS traffic, boot-file enable/disable, idempotent install. Logs: ${paths.stderr}`);
 } finally {
   await service.pause(); target.stop(true); await rm(base, { recursive: true, force: true });
 }
