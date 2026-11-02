@@ -1,7 +1,7 @@
-#!/usr/bin/env bun
+import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { parseArgs, HELP } from './args';
-import { Paths, run, exists, withLock } from './system';
+import { Paths, run, exists, withLock, selfInvocation } from './system';
 import { Service, errorMessage } from './service';
 import { install, releaseEndpoint, withPreparedInstall, activatePreparedInstall } from './install';
 import { statusCacheRoot, cacheSize, formatCacheSize } from './cache';
@@ -9,15 +9,19 @@ import { manageRoute } from './routes';
 import { backupConfig, restoreConfig } from './backup';
 
 async function elevate(argv: string[]): Promise<number> {
-  const invocation = Bun.main.startsWith('/$bunfs/') ? [process.execPath] : [process.execPath, Bun.main];
+  const invocation = selfInvocation();
   console.log('Requesting administrator privileges...');
-  const child = Bun.spawn(['/usr/bin/sudo', '--', ...invocation, ...argv], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' });
+  const child = spawn('/usr/bin/sudo', ['--', ...invocation, ...argv], { stdio: 'inherit' });
+  const exited = new Promise<number>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', code => resolve(code ?? 1));
+  });
   // Keep the parent alive long enough to clean up the prepared download on Ctrl-C.
   const interrupt = () => { child.kill('SIGINT'); };
   const terminate = () => { child.kill('SIGTERM'); };
   process.on('SIGINT', interrupt);
   process.on('SIGTERM', terminate);
-  try { return await child.exited; }
+  try { return await exited; }
   finally {
     process.off('SIGINT', interrupt);
     process.off('SIGTERM', terminate);

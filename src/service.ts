@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import { readFile, rm, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { Paths, type Runner, checked, exists, atomicWrite, optionalRead, restoreFile } from './system';
@@ -56,7 +57,7 @@ export class Service {
     await checked(this.runner, ['/bin/launchctl', 'bootout', this.paths.target]);
     for (let n = 0; n < this.timing.attempts; n++) {
       if (!(await this.state()).loaded) return;
-      await Bun.sleep(this.timing.interval);
+      await sleep(this.timing.interval);
     }
     throw new Error('Timed out waiting for sing-box to pause.');
   }
@@ -71,7 +72,7 @@ export class Service {
       stable = current.pid && current.pid === lastPid ? stable + 1 : 0;
       lastPid = current.pid;
       if (stable >= this.timing.stableSamples) return;
-      await Bun.sleep(this.timing.interval);
+      await sleep(this.timing.interval);
     }
     throw new Error(`sing-box did not remain running. See ${this.paths.stderr}`);
   }

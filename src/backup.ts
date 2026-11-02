@@ -1,7 +1,9 @@
+import { spawn } from 'node:child_process';
+import { fchownSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { open, readFile, readdir, lstat, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { atomicWrite, exists, optionalRead, restoreFile, type Paths } from './system';
+import { atomicWrite, exists, optionalRead, restoreFile, writeNewFile, type Paths } from './system';
 import { Service, errorMessage } from './service';
 
 const MAX_FILE = 32 * 1024 * 1024;
@@ -9,26 +11,30 @@ const MAX_TOTAL = 64 * 1024 * 1024;
 const MAX_FILES = 1024;
 type Entry = { path: string; member: string; size: number; sha256: string };
 type Manifest = { format: 'sbm-config-backup'; version: 1; bootEnabled: boolean; files: Entry[] };
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 const digest = (data: Uint8Array) => createHash('sha256').update(data).digest('hex');
 const excluded = (path: string) => ['bin', 'logs', '.lock'].includes(path.split('/')[0]) || /^\.(backup|restore|install)-/.test(path.split('/')[0]) || ['service.plist', 'cache.db', 'cache.db-shm', 'cache.db-wal'].includes(path);
 function validPath(path: string): boolean {
   return !!path && !isAbsolute(path) && !path.includes('\\') && !path.split('/').some(x => !x || x === '.' || x === '..') && !excluded(path);
 }
-async function runBinary(argv: string[], cwd?: string, max = MAX_TOTAL): Promise<Buffer> {
-  const child = Bun.spawn(argv, { cwd, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
-  const chunks: Uint8Array[] = []; let size = 0;
-  const stderr = new Response(child.stderr).text();
-  try {
-    for await (const chunk of child.stdout) {
+async function runBinary(argv: string[], cwd = process.cwd(), max = MAX_TOTAL): Promise<Buffer> {
+  const child = spawn(argv[0], argv.slice(1), { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [], errors: Buffer[] = [];
+    let size = 0, oversized = false;
+    child.stdout.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > max) { child.kill(); throw new Error('Archive output exceeds the size limit.'); }
-      chunks.push(chunk);
-    }
-    const code = await child.exited;
-    const err = await stderr;
-    if (code !== 0) throw new Error(`${argv[0]} failed: ${err.trim() || `exit ${code}`}`);
-    return Buffer.concat(chunks);
-  } finally { await child.exited; await stderr; }
+      if (size > max) { oversized = true; child.kill(); }
+      else chunks.push(chunk);
+    });
+    child.stderr.on('data', (chunk: Buffer) => { errors.push(chunk); });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (oversized) reject(new Error('Archive output exceeds the size limit.'));
+      else if (code !== 0) reject(new Error(`${argv[0]} failed: ${Buffer.concat(errors).toString().trim() || `exit ${code}`}`));
+      else resolve(Buffer.concat(chunks));
+    });
+  });
 }
 async function filesUnder(base: string): Promise<string[]> {
   const files: string[] = [];
@@ -49,10 +55,10 @@ async function filesUnder(base: string): Promise<string[]> {
   return files.sort();
 }
 function localReferences(data: Buffer, base: string): string[] {
-  let config: any;
-  try { config = JSON.parse(data.toString()); } catch { throw new Error('Backup requires a plain JSON configuration.'); }
+  let config: JsonValue;
+  try { config = JSON.parse(data.toString()) as JsonValue; } catch { throw new Error('Backup requires a plain JSON configuration.'); }
   const references: string[] = [];
-  const walk = (obj: any) => {
+  const walk = (obj: JsonValue): void => {
     if (!obj || typeof obj !== 'object') return;
     if (Array.isArray(obj)) { for (const x of obj) walk(x); return; }
     if (obj.type === 'local' && typeof obj.path === 'string') references.push(obj.path);
@@ -101,7 +107,7 @@ export async function backupConfig(paths: Paths, destination: string): Promise<s
       total += data.length;
       if (data.length > MAX_FILE || total > MAX_TOTAL) throw new Error('Managed files exceed backup size limits.');
       const member = `files/${String(manifest.files.length).padStart(6, '0')}`;
-      await writeFile(join(stage, member), data, { mode: 0o600 });
+      await writeNewFile(join(stage, member), data);
       manifest.files.push({ path, member, size: data.length, sha256: digest(data) });
     }
     await writeFile(join(stage, 'manifest.json'), JSON.stringify(manifest), { mode: 0o600 });
@@ -111,7 +117,7 @@ export async function backupConfig(paths: Paths, destination: string): Promise<s
     try {
       await file.writeFile(data);
       const uid = process.env.SUDO_UID, gid = process.env.SUDO_GID;
-      if (uid && gid && /^\d+$/.test(uid) && /^\d+$/.test(gid)) await file.chown(Number(uid), Number(gid));
+      if (uid && gid && /^\d+$/.test(uid) && /^\d+$/.test(gid)) fchownSync(file.fd, Number(uid), Number(gid));
     } catch (e) { await file.close(); await rm(destination, { force: true }); throw e; }
     await file.close();
     return `Configuration backup saved to ${destination}.`;
@@ -131,7 +137,7 @@ export async function restoreConfig(service: Service, archive: string): Promise<
     const snapshot = join(stage, 'backup.zip');
     const data = await readFile(zip);
     if (data.length > MAX_TOTAL) throw new Error('Backup archive exceeds the size limit.');
-    await writeFile(snapshot, data, { mode: 0o600 });
+    await writeNewFile(snapshot, data);
     const listing = (await runBinary(['/usr/bin/unzip', '-Z1', snapshot], undefined, 256 * 1024)).toString().split('\n').filter(Boolean);
     if (listing.length > MAX_FILES + 2 || new Set(listing).size !== listing.length || listing.some(x => x !== 'manifest.json' && x !== 'files/' && !/^files\/\d{6}$/.test(x))) throw new Error('Invalid backup archive members.');
     const manifest = JSON.parse((await runBinary(['/usr/bin/unzip', '-p', snapshot, 'manifest.json'], undefined, 1024 * 1024)).toString()) as Manifest;

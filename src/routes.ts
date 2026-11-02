@@ -55,7 +55,10 @@ export async function manageRoute(paths: Paths, args: RouteArgs): Promise<string
   if (args.action === 'add' && index !== -1) return 'Route already exists; no change.';
   if (args.action === 'remove' && index === -1) throw new Error('Route not found; no change.');
   if (args.action === 'add') entries.push(value); else entries.splice(index, 1);
-  if (entries.length) rule[args.field] = entries; else delete rule[args.field];
+  if (entries.length) rule[args.field] = entries;
+  else if (args.field === 'ip_cidr') delete rule.ip_cidr;
+  else if (args.field === 'domain') delete rule.domain;
+  else delete rule.domain_suffix;
   set.rules = Object.keys(rule).length ? [rule] : [];
   await atomicWrite(path, JSON.stringify(set, null, 2) + '\n');
   return `Route ${args.action === 'add' ? 'added' : 'removed'}.`;

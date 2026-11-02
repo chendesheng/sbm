@@ -72,3 +72,17 @@ test('rejects external references and invalid archives before modifying service 
   await writeFile(zip,'not a zip'); await expect(restoreConfig(f.service,zip)).rejects.toThrow();
   expect(f.active).toBe(true);
 });
+test('finds local references in nested JSON arrays and TLS path arrays', async () => {
+  const f = await fixture();
+  await writeFile(join(f.p.base, 'cert.pem'), 'certificate');
+  await writeFile(f.p.config, JSON.stringify({
+    nested: [null, true, 42, 'text', [{ type: 'local', path: 'direct.json' }]],
+    tls: { certificate_path: ['cert.pem', null, 42] },
+  }));
+  await backupConfig(f.p, join(f.root, 'nested.zip'));
+  await rm(join(f.p.base, 'cert.pem'));
+  await expect(backupConfig(f.p, join(f.root, 'missing-cert.zip'))).rejects.toThrow('Referenced local asset is missing: cert.pem');
+  await writeFile(join(f.p.base, 'cert.pem'), 'certificate');
+  await rm(join(f.p.base, 'direct.json'));
+  await expect(backupConfig(f.p, join(f.root, 'missing-route.zip'))).rejects.toThrow('Referenced local asset is missing: direct.json');
+});

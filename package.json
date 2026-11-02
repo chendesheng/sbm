@@ -5,10 +5,16 @@
   "type": "module",
   "scripts": {
     "dev": "bun src/cli.ts",
-    "build": "bun scripts/build.ts",
-    "smoke:launchd": "bun scripts/smoke-launchd.ts",
+    "build": "bun scripts/build.mjs",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
-  "devDependencies": { "@types/bun": "1.4.4", "typescript": "~5.9.3" }
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "scriptc": "0.4.7",
+    "typescript": "~5.9.3"
+  },
+  "trustedDependencies": [
+    "scriptc"
+  ]
 }

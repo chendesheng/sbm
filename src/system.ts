@@ -1,15 +1,30 @@
-import { mkdir, chmod, writeFile, rename, rm, access, readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { mkdir, chmod, open, writeFile, rename, rm, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type Result = { code: number; stdout: string; stderr: string };
 export type Runner = (args: string[]) => Promise<Result>;
-export const run: Runner = async (args) => {
-  const child = Bun.spawn(args, { stdout: 'pipe', stderr: 'pipe', stdin: 'ignore', timeout: 30_000 });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
-  ]);
-  return { code, stdout, stderr };
-};
+export async function run(args: string[], timeout = 30_000): Promise<Result> {
+  const child = spawn(args[0], args.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] });
+  const timer = setTimeout(() => { child.kill('SIGTERM'); }, timeout);
+  const exited = new Promise<number>((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', code => resolve(code ?? 1));
+  });
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  child.stdout.on('data', (chunk: Buffer) => { stdout.push(chunk); });
+  child.stderr.on('data', (chunk: Buffer) => { stderr.push(chunk); });
+  try {
+    const code = await exited;
+    return { code, stdout: Buffer.concat(stdout).toString(), stderr: Buffer.concat(stderr).toString() };
+  } finally { clearTimeout(timer); }
+}
+export function selfInvocation(): string[] {
+  // ScriptC supplies a synthetic argv[0]; source execution needs its entry file.
+  return process.argv[0] === 'scriptc' ? [process.execPath] : [process.execPath, process.argv[1]];
+}
 export async function checked(runner: Runner, args: string[]): Promise<string> {
   const result = await runner(args);
   if (result.code !== 0) throw new Error(`${args[0]} failed (${result.code}): ${result.stderr.trim() || result.stdout.trim()}`);
@@ -37,7 +52,8 @@ export class Paths {
     await mkdir(join(this.base, 'bin'), { recursive: true, mode: 0o700 });
     await mkdir(join(this.base, 'logs'), { recursive: true, mode: 0o700 });
     for (const file of [this.stdout, this.stderr]) {
-      await writeFile(file, '', { flag: 'a', mode: 0o600 });
+      const handle = await open(file, 'a', 0o600);
+      await handle.close();
       await chmod(file, 0o600);
     }
   }
@@ -45,9 +61,18 @@ export class Paths {
 export async function atomicWrite(path: string, value: string | Uint8Array, mode = 0o600) {
   const temp = `${path}.${crypto.randomUUID()}.tmp`;
   try {
-    await writeFile(temp, value, { mode, flag: 'wx' });
+    await writeNewFile(temp, value, mode);
     await rename(temp, path);
   } finally { await rm(temp, { force: true }); }
+}
+// Keep exclusive creation and binary writes on the same descriptor.
+export async function writeNewFile(path: string, value: string | Uint8Array, mode = 0o600) {
+  const file = await open(path, 'wx', mode);
+  try {
+    // ScriptC requires a concrete input type for each writeFile call.
+    if (typeof value === 'string') await file.writeFile(value);
+    else await file.writeFile(value);
+  } finally { await file.close(); }
 }
 export async function restoreFile(path: string, old: Uint8Array | undefined, mode = 0o600) {
   if (old) await atomicWrite(path, old, mode);
@@ -66,7 +91,7 @@ export async function withLock<T>(paths: Paths, action: () => Promise<T>, timeou
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       if (!announced) { console.log('Waiting for another sbm operation to finish...'); announced = true; }
       if (Date.now() >= deadline) throw new Error(`Another sbm operation holds ${lock}. If interrupted, confirm no sbm command is running before removing this directory.`);
-      await Bun.sleep(100);
+      await sleep(100);
     }
   }
   try {

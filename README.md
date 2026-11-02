@@ -1,10 +1,10 @@
 # sbm
 
-A small macOS command-line manager for [sing-box](https://github.com/SagerNet/sing-box), written in TypeScript and compiled with Bun native AOT. `sbm` exits after each command; launchd runs sing-box directly. Supports Apple Silicon and Intel Macs.
+A small macOS command-line manager for [sing-box](https://github.com/SagerNet/sing-box), written in TypeScript and compiled to native code with [ScriptC](https://scriptc.dev). `sbm` exits after each command; launchd runs sing-box directly. Supports Apple Silicon and Intel Macs.
 
 ## Build and install the CLI
 
-Install a Bun version that supports native AOT (`bun compile`), then:
+Install Bun for dependency installation, builds and source tests, Node.js 24 or later for ScriptC's npm installer, and the Xcode Command Line Tools (`xcode-select --install`), then:
 
 ```sh
 bun install --frozen-lockfile
@@ -14,13 +14,13 @@ bun run build
 sudo install -m 755 dist/sbm /usr/local/bin/sbm
 ```
 
-The compiled executable does not require Bun on the target machine. Builds are native: build on arm64 for arm64 and on Intel for x64. The `/usr/local/bin` directory must already exist or be created before installing the CLI.
+The compiled executable requires neither Bun nor Node.js on the target machine. ScriptC links its own native support code, with no JavaScript engine. Builds use the host architecture: build on arm64 for arm64 and on Intel for x64. The `/usr/local/bin` directory must already exist or be created before installing the CLI.
 
-### Native AOT toolchain
+### Native compiler
 
-`bun run build` uses the installed Bun executable and invokes `bun compile --trim`. It checks for native AOT support first and reports a clear error if unavailable. It does not download or manage a separate compiler. See the [Bun AOT documentation](https://bun.com/docs/compiler/aot) for toolchain requirements. Native AOT is experimental.
+ScriptC **0.4.7** is pinned as a development dependency. Its required postinstall script is listed in Bun's `trustedDependencies`; it installs the compiler entry point from the platform-specific optional dependencies. Keep optional dependencies and install scripts enabled. `bun run build` runs the build driver with Bun, invokes the native compiler and writes `dist/sbm`. The driver uses Apple's system toolchain on macOS so an unrelated Clang installation cannot select a stale SDK. Set `SCRIPTC=/absolute/path/to/scriptc` to use a standalone compiler instead.
 
-The initial build was verified on macOS arm64 with Bun **1.4.4-canary.1+3f3a9ff87** and TypeScript **5.9.3**. Stable Bun **1.4.4** did not expose `bun compile` when checked on 2026-11-02.
+ScriptC is experimental. This port was verified on macOS arm64 with ScriptC **0.4.7** and TypeScript **5.9.3**. The runtime source uses Node APIs; Bun is used for build tooling, source development and unit tests.
 
 ## Commands
 
@@ -107,9 +107,8 @@ bun test
 bun run typecheck
 bun run build
 env -i PATH=/usr/bin:/bin ./dist/sbm --help
-bun run smoke:launchd
 ```
 
-Tests cover aliasing, missing-core startup, config replacement and rollback, install verification and rollback, boot settings, command idempotence, and concurrent operations. The opt-in smoke script downloads the official core, exercises the same lifecycle code in a disposable **user** launchd domain, and verifies actual SOCKS traffic to a loopback HTTP server. It removes its job and files afterwards. This is not a privileged system-domain, TUN, or reboot test.
+All tests live under `test/` and run together with `bun test`. The suite builds the CLI automatically and includes source tests plus two compiled tests. The native test covers CLI/self invocation, subprocess errors and timeouts, exclusive binary writes and permissions, routes, locks, backup ownership, restore, and rollback. ScriptC compiles the programs in `test/fixtures/`, and the test runner executes them with Bun and Node.js absent from `PATH`.
 
-The initial implementation passed that user-domain smoke test with sing-box 1.14.4. Privileged system-service activation, password-prompt cancellation, actual reboot persistence, Intel builds, and real TUN/private-network traffic still require separate runtime verification.
+The launchd test runs as part of the same suite. Run tests as your logged-in macOS user with Xcode Command Line Tools installed and network access to GitHub. It downloads or reuses the verified official core, exercises the same lifecycle code in a disposable **user** launchd domain, and verifies actual SOCKS traffic to a loopback HTTP server. It removes its job and files afterwards. The ScriptC port passed this test with sing-box **1.14.4**, including running/paused backup restore and idempotent install. Privileged system-service activation, password-prompt cancellation, actual reboot persistence, Intel builds, and real TUN/private-network traffic still require separate runtime verification.

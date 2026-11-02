@@ -49,6 +49,6 @@ export function parseArgs(args: string[]): Args {
   if (!['install', 'start', 'pause', 'status', 'enable', 'disable'].includes(command)) throw new Error(`Unknown command: ${name}. Run sbm --help.`);
   if (args.length === 2 && ['--help', '-h'].includes(args[1])) return { command: 'help' };
   const option = command === 'install' ? '--version' : command === 'start' ? '--config' : undefined;
-  if (args.length !== 1 && !(option && args.length === 3 && args[1] === option && args[2] && !args[2].startsWith('--'))) throw new Error(`Invalid arguments for ${name}. Run sbm --help.`);
+  if (args.length !== 1 && !(option !== undefined && args.length === 3 && args[1] === option && !!args[2] && !args[2].startsWith('--'))) throw new Error(`Invalid arguments for ${name}. Run sbm --help.`);
   return { command: command as Command, value: args[2] };
 }
