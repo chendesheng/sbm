@@ -7,13 +7,25 @@ const root = resolve(import.meta.dirname, '..');
 const build = join(root, 'dist/app-build');
 const bundle = join(root, 'dist/sbm.app');
 const macos = join(bundle, 'Contents/MacOS');
+const resources = join(bundle, 'Contents/Resources');
 mkdirSync(build, { recursive: true }); mkdirSync(macos, { recursive: true });
+mkdirSync(resources, { recursive: true });
 const env = { ...process.env, PATH: `/usr/bin:/bin:/usr/sbin:/sbin:${process.env.PATH || ''}` };
 function execute(command, args) {
   const result = spawnSync(command, args, { cwd: root, env, stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
+const iconset = join(build, 'AppIcon.iconset');
+mkdirSync(iconset, { recursive: true });
+for (const size of [16, 32, 128, 256, 512]) {
+  for (const scale of [1, 2]) {
+    const pixels = String(size * scale);
+    execute('/usr/bin/sips', ['-z', pixels, pixels, join(root, 'native/assets/AppIcon.png'),
+      '--out', join(iconset, `icon_${size}x${size}${scale === 2 ? '@2x' : ''}.png`)]);
+  }
+}
+execute('/usr/bin/iconutil', ['-c', 'icns', iconset, '-o', join(resources, 'AppIcon.icns')]);
 const object = join(build, 'menubar.o');
 execute('/usr/bin/xcrun', ['clang', '-fobjc-arc', '-fblocks', '-mmacosx-version-min=14.0', '-O2', '-c', 'native/menubar.m', '-o', object]);
 const functions = [
@@ -41,6 +53,7 @@ writeFileSync(join(bundle, 'Contents/Info.plist'), `<?xml version="1.0" encoding
 <key>CFBundleExecutable</key><string>sbm</string>
 <key>CFBundleName</key><string>sbm</string>
 <key>CFBundleDisplayName</key><string>sbm</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>${version}</string>
 <key>CFBundleVersion</key><string>${version}</string>

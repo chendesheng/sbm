@@ -1,0 +1,8 @@
+Generated with the built-in imagegen tool. The user-supplied sing-box icon was used as a visual reference.
+
+Use case: logo-brand.
+Asset type: final macOS application icon for sbm.app, one square 1024x1024 production asset.
+Primary request: a polished minimalist paper plane icon inspired by the supplied sing-box reference: vivid warm yellow rounded-square tile and a bold vermilion red folded paper airplane pointing northeast.
+Reference role: supplied sing-box icon is visual inspiration for palette and immediate recognizability. Create a clean original rendition for sbm.
+Composition: large single geometric folded-paper airplane centered optically on the tile, clear elegant triangular wings and one darker red fold, simple silhouette legible at 16 pixels. Plane occupies about 55 percent of tile. Tile occupies about 88 percent of canvas, with macOS-style smoothly rounded corners and equal transparent padding. Very subtle warm tile shading and soft short shadow for polish, otherwise flat graphic shapes with crisp precise edges.
+Constraints: exactly one icon, front view, transparent outside tile, no text or initials, no watermark, no extra symbols, no outline or dark border, no mockup, no surrounding scene. Avoid fuzzy edges, complex origami, dramatic 3D, glossy glass, strong cast shadows.
