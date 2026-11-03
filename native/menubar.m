@@ -4,6 +4,8 @@
 @interface SbmMenu : NSObject <NSApplicationDelegate>
 @property NSStatusItem *item;
 @property NSMenuItem *stateItem;
+@property NSTextField *stateLabel;
+@property NSImageView *stateDot;
 @property NSMenuItem *versionItem;
 @property NSMenuItem *toggleItem;
 @property NSMenuItem *upgradeItem;
@@ -63,14 +65,58 @@ static void finishAuthorization(int32_t code, NSString *message) {
     @synchronized ([SbmMenu class]) { authorizationMessage = message ?: @""; authorizationCode = code; }
 }
 
+static NSImage *paperPlaneImage(void) {
+    NSImage *image = [NSImage imageWithSize:NSMakeSize(20, 20) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+        [NSColor.blackColor setFill];
+        NSBezierPath *plane = [NSBezierPath bezierPath];
+        [plane moveToPoint:NSMakePoint(1, 8)];
+        [plane lineToPoint:NSMakePoint(19, 17)];
+        [plane lineToPoint:NSMakePoint(14, 3)];
+        [plane lineToPoint:NSMakePoint(9, 5)];
+        [plane lineToPoint:NSMakePoint(16, 14)];
+        [plane lineToPoint:NSMakePoint(7, 6)];
+        [plane closePath]; [plane fill];
+        NSBezierPath *fold = [NSBezierPath bezierPath];
+        [fold moveToPoint:NSMakePoint(8, 4.5)];
+        [fold lineToPoint:NSMakePoint(10.5, 3.5)];
+        [fold lineToPoint:NSMakePoint(7.5, 1)];
+        [fold closePath]; [fold fill];
+        return YES;
+    }];
+    image.template = YES;
+    return image;
+}
+
+static NSImage *statusDot(NSColor *color) {
+    return [NSImage imageWithSize:NSMakeSize(8, 8) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+        [color setFill]; [[NSBezierPath bezierPathWithOvalInRect:rect] fill]; return YES;
+    }];
+}
+
 @implementation SbmMenu
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
-    self.item = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
-    self.item.button.title = @"🟡";
+    self.item = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
+    self.item.button.image = paperPlaneImage();
+    self.item.button.imagePosition = NSImageOnly;
+    self.item.button.accessibilityLabel = @"sbm";
     self.item.button.toolTip = @"sbm — checking sing-box";
     NSMenu *items = [[NSMenu alloc] initWithTitle:@"sbm"];
     items.autoenablesItems = NO;
-    self.stateItem = [items addItemWithTitle:@"🟡 Checking…" action:nil keyEquivalent:@""];
+    self.stateItem = [items addItemWithTitle:@"Checking…" action:nil keyEquivalent:@""];
+    NSView *header = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 260, 72)];
+    NSImageView *appIcon = [[NSImageView alloc] initWithFrame:NSMakeRect(14, 12, 48, 48)];
+    appIcon.image = [[NSImage alloc] initWithContentsOfFile:[[NSBundle mainBundle] pathForResource:@"AppIcon" ofType:@"icns"]];
+    [header addSubview:appIcon];
+    NSTextField *name = [NSTextField labelWithString:@"sbm"];
+    name.frame = NSMakeRect(76, 37, 170, 23); name.font = [NSFont boldSystemFontOfSize:17];
+    [header addSubview:name];
+    self.stateDot = [[NSImageView alloc] initWithFrame:NSMakeRect(77, 21, 8, 8)];
+    self.stateDot.image = statusDot(NSColor.systemYellowColor); [header addSubview:self.stateDot];
+    self.stateLabel = [NSTextField labelWithString:@"Checking…"];
+    self.stateLabel.frame = NSMakeRect(90, 15, 156, 20);
+    self.stateLabel.font = [NSFont systemFontOfSize:13]; self.stateLabel.textColor = NSColor.secondaryLabelColor;
+    [header addSubview:self.stateLabel]; self.stateItem.view = header;
+    [items addItem:[NSMenuItem separatorItem]];
     self.versionItem = [items addItemWithTitle:@"sing-box —" action:nil keyEquivalent:@""];
     self.stateItem.enabled = NO; self.versionItem.enabled = NO;
     [items addItem:[NSMenuItem separatorItem]];
@@ -99,7 +145,9 @@ static void finishAuthorization(int32_t code, NSString *message) {
             if ([title hasPrefix:@"Upgrading ("] && ![title isEqual:previousTitle]) {
                 previousTitle = [title copy]; changes++;
             }
-            BOOL passed = changes >= 3 && !self.upgradeItem.enabled && !self.toggleItem.enabled && [self.item.button.title isEqual:@"🟢"];
+            BOOL passed = changes >= 3 && !self.upgradeItem.enabled && !self.toggleItem.enabled
+                && self.item.button.image.isTemplate && self.item.button.title.length == 0
+                && [self.stateLabel.stringValue isEqual:@"Running"];
             if (passed || -[started timeIntervalSinceNow] > 8) {
                 interfaceResult = passed ? 0 : 1;
                 [timer invalidate]; [self.item.menu cancelTracking]; [NSApp stop:nil];
@@ -130,11 +178,12 @@ static void finishAuthorization(int32_t code, NSString *message) {
     NSString *kind = message[@"kind"];
     if ([kind isEqual:@"state"]) {
         NSInteger state = [message[@"status"] integerValue];
-        NSString *icon = state == 1 ? @"🟢" : state == 2 ? @"🔴" : @"🟡";
         NSString *label = state == 1 ? @"Running" : state == 2 ? @"Paused" : @"Checking / waiting";
-        self.item.button.title = icon;
         self.item.button.toolTip = [NSString stringWithFormat:@"sbm — %@", label];
-        self.stateItem.title = [NSString stringWithFormat:@"%@ %@", icon, label];
+        self.stateItem.title = label;
+        self.stateLabel.stringValue = label;
+        self.stateDot.image = statusDot(state == 1 ? NSColor.systemGreenColor : state == 2 ? NSColor.systemRedColor : NSColor.systemYellowColor);
+        self.stateItem.view.accessibilityLabel = [NSString stringWithFormat:@"sbm, %@", label];
         self.versionItem.title = [@"sing-box " stringByAppendingString:message[@"version"]];
         self.busy = [message[@"busy"] boolValue]; self.loaded = [message[@"loaded"] boolValue];
         self.toggleItem.title = self.loaded ? @"Pause" : @"Start";
