@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { Paths, type Runner, type Result, run, exists, withLock } from '../src/system';
 import { Service, plist } from '../src/service';
 import { parseArgs } from '../src/args';
-import { install, releaseEndpoint, selectAsset, withPreparedInstall, activatePreparedInstall, type Fetcher } from '../src/install';
+import { install, releaseEndpoint, selectAsset, withPreparedInstall, activatePreparedInstall, activatePreparedAsUser, type Fetcher } from '../src/install';
 import type { Downloader } from '../src/download';
 
 const directories: string[] = [];
@@ -129,6 +129,33 @@ describe('service', () => {
   });
 });
 describe('installation', () => {
+  test('a paused user-owned core updates without authorization', async () => {
+    const f = await fixture(); const release = await releaseFixture(f);
+    let authorizations = 0;
+    const code = await withPreparedInstall(undefined, directory => activatePreparedAsUser(f.service, directory, { uid: process.getuid!(), gid: process.getgid!() }, async () => { authorizations++; return 1; }, 'arm64'), release.fetcher, 'arm64', release.downloader, f.service.runner, join(f.base, 'cache'));
+    expect(code).toBe(0); expect(authorizations).toBe(0);
+    expect(await f.service.version()).toBe('1.1.0');
+    expect((await f.service.state()).loaded).toBe(false);
+  });
+  test('a running update authorizes after releasing the lock; cancellation changes nothing', async () => {
+    const f = await fixture(); const release = await releaseFixture(f);
+    await f.service.start();
+    let authorizations = 0;
+    const code = await withPreparedInstall(undefined, directory => activatePreparedAsUser(f.service, directory, { uid: process.getuid!(), gid: process.getgid!() }, async () => {
+      authorizations++;
+      await withLock(f.paths, async () => {}, 100);
+      return 1;
+    }, 'arm64'), release.fetcher, 'arm64', release.downloader, f.service.runner, join(f.base, 'cache'));
+    expect(code).toBe(1); expect(authorizations).toBe(1);
+    expect(await f.service.version()).toBe('1.0.0'); expect(f.launches).toBe(1);
+  });
+  test('same-version install while running does not ask for authorization', async () => {
+    const f = await fixture(); const release = await releaseFixture(f, '1.0.0');
+    await f.service.start();
+    let authorizations = 0;
+    await withPreparedInstall(undefined, directory => activatePreparedAsUser(f.service, directory, { uid: process.getuid!(), gid: process.getgid!() }, async () => { authorizations++; return 1; }, 'arm64'), release.fetcher, 'arm64', release.downloader, f.service.runner, join(f.base, 'cache'));
+    expect(authorizations).toBe(0); expect(f.launches).toBe(1);
+  });
   test('reuses the verified cache after a cancelled administrator request', async () => {
     const f = await fixture(); const release = await releaseFixture(f); let downloads = 0;
     const downloader: Downloader = async (url, destination) => { downloads++; await release.downloader(url, destination); };

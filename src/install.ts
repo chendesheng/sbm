@@ -6,6 +6,7 @@ import { Service, errorMessage, coreVersion } from './service';
 import { checked, exists, atomicWrite, optionalRead, restoreFile, run, type Runner } from './system';
 import { download, type Downloader } from './download';
 import { defaultCacheRoot } from './cache';
+import { withDataLock, type Owner } from './storage';
 
 type Asset = { name: string; browser_download_url: string; digest?: string | null };
 type Release = { tag_name: string; draft: boolean; prerelease: boolean; assets: Asset[] };
@@ -94,6 +95,24 @@ export async function withPreparedInstall<T>(requested: string | undefined, acti
 function verifyArchive(archive: Uint8Array, asset: Asset) {
   const digest = createHash('sha256').update(archive).digest('hex');
   if (`sha256:${digest}` !== asset.digest?.toLowerCase()) throw new Error('Archive SHA-256 mismatch; existing installation left unchanged.');
+}
+
+async function preparedVersion(directory: string, arch: string): Promise<string> {
+  const metadata = JSON.parse((await readFile(join(directory, 'release.json'))).toString()) as Release;
+  return selectAsset(metadata, arch).version;
+}
+
+export async function activatePreparedAsUser(service: Service, directory: string, owner: Owner, authorize: () => Promise<number>, arch = process.arch): Promise<number> {
+  let needsRoot = false;
+  // The privileged retry takes the same lock and revalidates its own snapshot.
+  // Never hold the user lock while waiting for the sudo child to acquire it.
+  await withDataLock(service.paths, owner, async () => {
+    const state = await service.state();
+    const current = await exists(service.paths.core) && await service.version() === await preparedVersion(directory, arch);
+    if (state.loaded && !current) needsRoot = true;
+    else console.log(await activatePreparedInstall(service, directory, arch));
+  });
+  return needsRoot ? authorize() : 0;
 }
 
 // Called after elevation. Snapshot and recheck the archive before using it as root.

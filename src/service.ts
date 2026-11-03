@@ -62,6 +62,7 @@ export class Service {
     throw new Error('Timed out waiting for sing-box to pause.');
   }
   async launch() {
+    await mkdir(this.paths.systemBase, { recursive: true, mode: 0o755 });
     await atomicWrite(this.paths.plist, plist(this.paths));
     await checked(this.runner, ['/bin/launchctl', 'enable', this.paths.target]);
     await checked(this.runner, ['/bin/launchctl', 'bootstrap', this.paths.domain, this.paths.plist]);

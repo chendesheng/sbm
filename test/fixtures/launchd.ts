@@ -9,6 +9,7 @@ import { Paths, run } from '../../src/system';
 import { Service } from '../../src/service';
 import { install } from '../../src/install';
 import { backupConfig, restoreConfig } from '../../src/backup';
+import { migrateStorage } from '../../src/storage';
 
 const uid = process.getuid?.();
 if (process.platform !== 'darwin' || uid === undefined || uid === 0) throw new Error('Run this smoke test as your logged-in macOS user.');
@@ -56,7 +57,15 @@ try {
   if ((await service.state()).loaded) throw new Error('Pause did not unload the job.');
   console.log(await service.start()); await service.disable();
   console.log(await install(service));
+  const installedVersion = await service.version();
+  const userPaths = new Paths(join(base, 'user/Library/Application Support/sbm'), paths.bootDir, paths.label, paths.domain, paths.base);
+  const userService = new Service(userPaths, run);
+  await migrateStorage(userService, { uid, gid: process.getgid?.() ?? 0 });
+  if (!(await userService.state()).pid || await userService.version() !== installedVersion) throw new Error('User-path migration did not restore the live service.');
+  const migrated = await run(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '5', '--noproxy', '', '--socks5-hostname', `127.0.0.1:${port}`, `http://127.0.0.1:${address.port}`]);
+  if (migrated.code !== 0 || migrated.stdout !== 'sbm smoke ok') throw new Error(`Migrated proxy failed: ${migrated.stderr}`);
   console.log(`PASS: official core, real launchd, running/paused backup restore, repeated start/pause, loopback SOCKS traffic, boot-file enable/disable, idempotent install. Logs: ${paths.stderr}`);
+  console.log('PASS: live user-path migration preserves actual SOCKS traffic.');
 } finally {
   try { await service.pause(); }
   finally { target.close(); await rm(base, { recursive: true, force: true }); }

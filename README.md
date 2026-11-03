@@ -11,10 +11,11 @@ bun install --frozen-lockfile
 bun run typecheck
 bun test
 bun run build
-sudo install -m 755 dist/sbm /usr/local/bin/sbm
+mkdir -p "$HOME/.local/bin"
+install -m 755 dist/sbm "$HOME/.local/bin/sbm"
 ```
 
-The compiled executable requires neither Bun nor Node.js on the target machine. ScriptC links its own native support code, with no JavaScript engine. Builds use the host architecture: build on arm64 for arm64 and on Intel for x64. The `/usr/local/bin` directory must already exist or be created before installing the CLI.
+The compiled executable requires neither Bun nor Node.js on the target machine. ScriptC links its own native support code, with no JavaScript engine. Builds use the host architecture: build on arm64 for arm64 and on Intel for x64. Add `~/.local/bin` to your `PATH` if necessary; installing the CLI there needs no sudo.
 
 ### Native compiler
 
@@ -43,7 +44,9 @@ sbm config backup --file /path/to/sbm-backup.zip
 sbm config restore --file /path/to/sbm-backup.zip
 ```
 
-Commands that access protected state request `sudo` when needed. For `install` and `upgrade`, release lookup, curl download, checksum verification, and executable-version verification happen as your normal user **before** requesting sudo. Progress messages identify each stage; curl uses its default progress display. Run these commands without a `sudo` prefix to keep downloads unprivileged. Cancelling the sudo prompt exits unsuccessfully without performing the requested operation. `--help` and `--version` require no privileges. Boot startup defaults to disabled. There is no `stop` or `logs` command.
+`status`, route listing/editing, and configuration backup run without sudo. The core and managed data belong to your user under `~/Library/Application Support/sbm/`. Installing or updating a paused core also needs no sudo; updating a running core requests authorization to restart the system service. A same-version install does not request authorization. Run commands without a `sudo` prefix so downloads remain unprivileged. Progress messages identify each stage; curl uses its default progress display.
+
+Starting or pausing the system service, changing boot registration, and restoring a backup still request sudo when needed. An already-running plain `start`, already-paused `pause`, and already-disabled `disable` return without elevation. Cancelling authorization leaves the requested operation unapplied. Boot startup defaults to disabled. There is no `stop` or `logs` command.
 
 `start` **never** installs or upgrades a core. Run `install` first. The first start requires `--config`; afterwards plain `start` uses the saved configuration. With `--config`, sbm validates an exact snapshot, saves it as `config.json`, and restarts a running instance. It always manages one instance. The source file remains untouched; later source edits require another `start --config`. Invalid configurations leave the running service unchanged. Failed startup restores the previous config and previous active state; a rollback failure is reported explicitly.
 
@@ -55,19 +58,19 @@ Concurrent mutating commands wait for a filesystem lock for up to 30 seconds. Af
 
 ## Managed direct routes
 
-`sbm config route` manages two sing-box source-format JSON files: `direct.json` and `direct-priority.json` under `/Library/Application Support/sbm/`. The applied sing-box configuration must define local rule sets referring to these files and route them to `direct` in the desired order. Provision both files and apply that configuration before using these commands; sbm does not automatically rewrite arbitrary routing configurations. Lists are independent: use `--priority` to select the high-priority file. The `--outbound` option currently accepts only `direct`.
+`sbm config route` manages two sing-box source-format JSON files: `direct.json` and `direct-priority.json` under `~/Library/Application Support/sbm/`, without sudo. The applied sing-box configuration must define local rule sets referring to these files and route them to `direct` in the desired order. Provision both files and apply that configuration before using these commands; sbm does not automatically rewrite arbitrary routing configurations. Lists are independent: use `--priority` to select the high-priority file. The `--outbound` option currently accepts only `direct`.
 
 `--domain` is an exact match, `--domain_suffix` matches the domain and subdomains, and `--ip` accepts an IP address or CIDR. Each add or remove takes exactly one match option. Addresses without a prefix become `/32` or `/128`. Duplicate additions are no-ops; removing a missing entry reports an error. Commands serialize changes and atomically replace the selected file with private permissions. sing-box reloads local rule sets when modified; no service restart is issued. A paused service uses the saved lists on its next start. Installing or applying the main configuration and its rule-set references is a separate operation.
 
 ## Download cache
 
-`sbm status` prints the invoking user's cache folder and its total regular-file size, including nested entries, in readable units and exact bytes. A missing cache reports `0 B`; symbolic links are not followed. The same user cache is reported when status elevates through sudo.
+`sbm status` runs without sudo and prints the invoking user's cache folder and its total regular-file size, including nested entries, in readable units and exact bytes. A missing cache reports `0 B`; symbolic links are not followed. An explicit `sudo sbm status` still reports the original user's cache. Service state remains available when private data belongs to another user or has not yet been migrated; inaccessible fields report unavailable.
 
-Verified core archives are kept in `~/Library/Caches/sbm/<release-and-architecture>/<sha256>.tar.gz`. Installation checks the release metadata, reuses a matching checksum-valid archive, verifies its executable version, then requests sudo to apply it. Missing or corrupt archives are downloaded using curl's default progress display. Cache entries are keyed by version, architecture, and published checksum so changed releases cannot reuse stale bytes. Partial downloads are never promoted to completed cache entries. The cache survives cancelled sudo requests and installation failures. Remove this directory to clear it; this does not affect the installed core or saved configuration.
+Verified core archives are kept in `~/Library/Caches/sbm/<release-and-architecture>/<sha256>.tar.gz`. Installation checks the release metadata, reuses a matching checksum-valid archive, and verifies its executable version. Authorization is requested only when activation needs a service restart or a legacy storage migration. Missing or corrupt archives are downloaded using curl's default progress display. Cache entries are keyed by version, architecture, and published checksum so changed releases cannot reuse stale bytes. Partial downloads are never promoted to completed cache entries. The cache survives cancelled sudo requests and installation failures. Remove this directory to clear it; this does not affect the installed core or saved configuration.
 
 ## Configuration, assets, and logs
 
-Managed data is stored under `/Library/Application Support/sbm/`:
+The core and managed data are stored under the service owner's `~/Library/Application Support/sbm/`:
 
 | Path relative to that directory | Purpose |
 | --- | --- |
@@ -75,10 +78,15 @@ Managed data is stored under `/Library/Application Support/sbm/`:
 | `bin/sing-box.previous` | Core predating the last replacement |
 | `config.json` | Last successfully applied configuration |
 | `config.json.previous` | Configuration predating the last replacement |
-| `service.plist` | Runtime launchd definition |
 | `logs/stdout.log`, `logs/stderr.log` | Captured service output |
 
-The directory is root-owned and private; configurations, backups, and logs use mode `0600`. Read logs using the absolute paths printed by `sbm status`, for example `sudo tail -f '<stderr path>'`. If plain JSON sets `log.output`, status also reports that file. Service output files are appended and are not automatically rotated; manage their size as appropriate. Configuration contents are never printed by sbm, although core diagnostics can contain destination details.
+The directory is user-owned and private (`0700`); configurations, backups, and standard service logs use mode `0600`. Privileged operations return ownership of managed files to that user. Read the standard logs without sudo using the absolute paths printed by `sbm status`, for example `tail -f '<stderr path>'`. If plain JSON sets `log.output`, status also reports that file. Service output files are appended and are not automatically rotated; manage their size as appropriate. Configuration contents are never printed by sbm, although core diagnostics can contain destination details.
+
+Only `service.plist` and `owner.json` remain under the root-owned `/Library/Application Support/sbm/`. The owner record identifies the one user and data directory associated with the system service; sudo resolves that same directory instead of switching to root's home. Other users can read basic service status, but configuration commands must run as the owner or root. The root service intentionally trusts that user's executable and configuration.
+
+Existing installations migrate once when the next operation other than status needs the managed files. The migration requests administrator authorization, pauses a running service, moves its binary/config/assets/logs/cache into the user's Library, updates absolute paths under the old managed directory in the saved and previous JSON/JSONC configurations, updates service definitions, and resumes only a previously running service. Relative paths continue to resolve against the managed directory. Destination collisions fail before pausing; validation or startup failures attempt to restore the original files and service state. Status never triggers migration or requests sudo. No existing files at the destination are overwritten.
+
+Migration interrupts sing-box while it moves the files. Authorize it with local access or an independent connection; a remote session that relies on sing-box can disconnect and may require manual reconnection.
 
 The system service label is `io.github.chendesheng.sbm.sing-box`. Boot registration is `/Library/LaunchDaemons/io.github.chendesheng.sbm.sing-box.plist`. Sing-box runs as root for TUN support, with the managed directory as its working directory. Existing absolute paths are preserved. Relative asset/cache/log paths resolve against the managed directory, **not** the original configuration's directory. Copy required local rule sets, certificates, and other private assets there yourself, or use suitable absolute paths. Only the JSON is imported. Remote rule-set download/update behavior belongs to the supplied sing-box configuration; sbm does not rewrite routing or manage rule-set subscriptions.
 
@@ -90,7 +98,7 @@ Do not activate competing TUN configurations concurrently. sbm does not stop v2r
 
 `sbm config backup --file /path/to/backup.zip` creates one ZIP containing the saved configuration, its previous copy if present, managed route lists, other regular files under the managed directory, and the boot-startup setting. The ZIP contains credentials in plaintext and is created with mode `0600`; keep it somewhere private. An existing output file is not overwritten. The core binary, generated service definition, logs, download cache and default runtime `cache.db` are not included. Remote rule-set data can be downloaded again.
 
-The backup checks local rule-set paths and TLS key/certificate path fields in the active plain-JSON configuration. Referenced files must exist under `/Library/Application Support/sbm/`; an external or missing referenced file causes backup to fail rather than silently producing an incomplete archive. Other types of external dependencies are not automatically discovered. Move required assets into the managed directory and update their paths before backing up. The core must be installed separately on the restore machine, and the restored configuration must be compatible with its version.
+The backup checks local rule-set paths and TLS key/certificate path fields in the active plain-JSON configuration. Referenced files must exist under the service owner's `~/Library/Application Support/sbm/`; an external or missing referenced file causes backup to fail rather than silently producing an incomplete archive. Other types of external dependencies are not automatically discovered. Move required assets into the managed directory and update their paths before backing up. The core must be installed separately on the restore machine, and the restored configuration must be compatible with its version. Prefer relative asset references when moving backups between different user home directories.
 
 `sbm config restore --file /path/to/backup.zip` validates archive members, file checksums and the configuration before completing. It restores the archived managed files and boot-startup setting, while retaining whether the service was running or paused. A running service is restarted once. Other existing files that are not in the archive are left in place. If validation or activation fails, sbm attempts to restore the prior files, boot setting and service state. Restore does not change the source file originally supplied to `sbm start --config`.
 
@@ -98,7 +106,7 @@ The backup checks local rule-set paths and TLS key/certificate path fields in th
 
 Keep operational JSON, credentials, certificates, local assets, and any peer identities in your own private backup; they are absent from this repository. From a fresh clone, build/install the manager, install a compatible core, restore assets, then apply the backed-up JSON with `sbm start --config`. Enable boot startup separately if wanted. Reusing a device identity requires retiring its old active instance first.
 
-For manual recovery, pause the service, run `sbm install --version <known-good-version>` if necessary, and apply the previous config with `sbm start --config '/Library/Application Support/sbm/config.json.previous'`. Copy that backup elsewhere first if you need to retain it, since applying it updates the previous-config backup. Keep configuration and asset versions compatible. Automatic rollback covers failed replacements, not power loss during a command or network failures after successful startup.
+For manual recovery, pause the service, run `sbm install --version <known-good-version>` if necessary, and apply the previous config with `sbm start --config "$HOME/Library/Application Support/sbm/config.json.previous"`. Copy that backup elsewhere first if you need to retain it, since applying it updates the previous-config backup. Keep configuration and asset versions compatible. Automatic rollback covers failed replacements, not power loss during a command or network failures after successful startup.
 
 ## Validation
 
@@ -111,4 +119,4 @@ env -i PATH=/usr/bin:/bin ./dist/sbm --help
 
 All tests live under `test/` and run together with `bun test`. The suite builds the CLI automatically and includes source tests plus two compiled tests. The native test covers CLI/self invocation, subprocess errors and timeouts, exclusive binary writes and permissions, routes, locks, backup ownership, restore, and rollback. ScriptC compiles the programs in `test/fixtures/`, and the test runner executes them with Bun and Node.js absent from `PATH`.
 
-The launchd test runs as part of the same suite. Run tests as your logged-in macOS user with Xcode Command Line Tools installed and network access to GitHub. It downloads or reuses the verified official core, exercises the same lifecycle code in a disposable **user** launchd domain, and verifies actual SOCKS traffic to a loopback HTTP server. It removes its job and files afterwards. The ScriptC port passed this test with sing-box **1.14.4**, including running/paused backup restore and idempotent install. Privileged system-service activation, password-prompt cancellation, actual reboot persistence, Intel builds, and real TUN/private-network traffic still require separate runtime verification.
+The launchd test runs as part of the same suite. Run tests as your logged-in macOS user with Xcode Command Line Tools installed and network access to GitHub. It downloads or reuses the verified official core, exercises the same lifecycle code in a disposable **user** launchd domain, and verifies actual SOCKS traffic to a loopback HTTP server before and after moving the core and configuration to a user Library path. It removes its job and files afterwards. Source and compiled tests also cover migration rollback, path collisions, ownership records, unprivileged status, paused core updates, and cancellation before a running update. Privileged system-service activation, password-prompt cancellation, actual reboot persistence, Intel builds, and real TUN/private-network traffic still require separate runtime verification.

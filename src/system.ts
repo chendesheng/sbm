@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { mkdir, chmod, open, writeFile, rename, rm, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 
 export type Result = { code: number; stdout: string; stderr: string };
 export type Runner = (args: string[]) => Promise<Result>;
@@ -37,11 +38,14 @@ export async function exists(path: string): Promise<boolean> {
   }
 }
 export const LABEL = 'io.github.chendesheng.sbm.sing-box';
+export const SYSTEM_BASE = '/Library/Application Support/sbm';
+export const userDataRoot = (home = homedir()) => join(home, 'Library/Application Support/sbm');
 export class Paths {
-  constructor(readonly base = '/Library/Application Support/sbm', readonly bootDir = '/Library/LaunchDaemons', readonly label = LABEL, readonly domain = 'system') {}
+  constructor(readonly base = userDataRoot(), readonly bootDir = '/Library/LaunchDaemons', readonly label = LABEL, readonly domain = 'system', readonly systemBase = base === userDataRoot() && domain === 'system' ? SYSTEM_BASE : base) {}
   get core() { return join(this.base, 'bin/sing-box'); }
   get config() { return join(this.base, 'config.json'); }
-  get plist() { return join(this.base, 'service.plist'); }
+  get plist() { return join(this.systemBase, 'service.plist'); }
+  get registration() { return join(this.systemBase, 'owner.json'); }
   get bootPlist() { return join(this.bootDir, `${this.label}.plist`); }
   get stdout() { return join(this.base, 'logs/stdout.log'); }
   get stderr() { return join(this.base, 'logs/stderr.log'); }

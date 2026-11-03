@@ -7,6 +7,7 @@ import { Service } from '../../src/service';
 import { backupConfig, restoreConfig } from '../../src/backup';
 import { manageRoute, normalize, routeFile } from '../../src/routes';
 import { parseArgs } from '../../src/args';
+import { migrateStorage, readRegistration } from '../../src/storage';
 
 function check(ok: boolean, message: string) { if (!ok) throw new Error(message); }
 async function rejects(action: () => Promise<unknown>, message: string) {
@@ -37,6 +38,8 @@ async function smoke() {
     check(version.code === 0 && version.stdout === '0.1.0\n', 'CLI version failed');
     const bad = await run([cli, 'unknown']);
     check(bad.code !== 0 && bad.stderr.includes('Unknown command'), 'CLI error status failed');
+    const status = await run([cli, 'status']);
+    check(status.code === 0 && status.stdout.includes('State: ') && !status.stdout.includes('administrator privileges'), 'Status must not request sudo');
     const streams = await run(['/bin/sh', '-c', 'printf stdout; printf stderr >&2; exit 7']);
     check(streams.code === 7 && streams.stdout === 'stdout' && streams.stderr === 'stderr', 'Subprocess output/status failed');
     await rejects(() => run(['/no/such/sbm-command']), 'Missing executable must reject');
@@ -103,6 +106,20 @@ async function smoke() {
     invalid = false;
     await service.pause(); await restoreConfig(service, backup);
     check(!active, 'Paused restore started the service');
+    const legacy = new Paths(join(root, 'legacy'), join(root, 'migration-boot'));
+    await legacy.prepare();
+    await writeNewFile(legacy.core, 'fixture');
+    await atomicWrite(join(legacy.base, 'direct.json'), '{"version":1,"rules":[]}');
+    await atomicWrite(legacy.config, JSON.stringify({ route: { rule_set: [{ type: 'local', path: join(legacy.base, 'direct.json') }] } }));
+    const userPaths = new Paths(join(root, 'user/Library/Application Support/sbm'), legacy.bootDir, legacy.label, legacy.domain, legacy.base);
+    const userService = new Service(userPaths, runner, { attempts: 4, interval: 1, stableSamples: 1 });
+    await migrateStorage(userService, { uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 });
+    check((await readRegistration(legacy.base))?.base === userPaths.base, 'Native owner registration failed');
+    check((await readFile(userPaths.config, 'utf8')).includes(join(userPaths.base, 'direct.json')), 'Native config relocation failed');
+    check((await readFile(userPaths.core, 'utf8')) === 'fixture', 'Native binary migration failed');
+    await manageRoute(userPaths, { action: 'add', priority: false, field: 'domain', value: 'example.com', outbound: 'direct' });
+    await backupConfig(userPaths, join(root, 'migrated.zip'));
+    console.log('PASS: user-path migration, owner registration, unprivileged status, routes and backup.');
     console.log('PASS: native CLI/self invocation, subprocess output/errors/timeout, private binary files, routes, locks, backup ownership, running/paused restore and rollback.');
   } finally { await rm(root, { recursive: true, force: true }); }
 }
