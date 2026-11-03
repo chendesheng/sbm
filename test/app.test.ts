@@ -1,0 +1,97 @@
+import { afterEach, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { AppController, AuthorizationCancelled, newerVersion, type AppAction, type AppModel } from '../src/app/controller';
+import { Service } from '../src/service';
+import { Paths, run, withLock, type Runner } from '../src/system';
+import type { Downloader } from '../src/download';
+
+const folders: string[] = [];
+afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }); });
+async function fixture(running = false, latest = '1.1.0') {
+  const root = await mkdtemp(join(tmpdir(), 'sbm-app-')); folders.push(root);
+  const paths = new Paths(join(root, 'managed'), join(root, 'boot')); await paths.prepare();
+  await writeFile(paths.core, '1.0.0'); await writeFile(paths.config, '{}');
+  const folder = `sing-box-${latest}-darwin-arm64`;
+  await mkdir(join(root, folder)); await writeFile(join(root, folder, 'sing-box'), latest);
+  const archive = join(root, 'release.tar.gz');
+  expect((await run(['/usr/bin/tar', '-czf', archive, '-C', root, folder])).code).toBe(0);
+  const bytes = await readFile(archive);
+  const release = { tag_name: `v${latest}`, draft: false, prerelease: false, assets: [{ name: `${folder}.tar.gz`, digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}`, browser_download_url: `https://github.com/SagerNet/sing-box/releases/download/v${latest}/${folder}.tar.gz` }] };
+  let active = running, rejectCandidate = false, downloads = 0;
+  const calls: string[][] = [];
+  const runner: Runner = async args => {
+    calls.push(args);
+    if (args[0] === '/bin/launchctl') {
+      if (args[1] === 'print') return active ? { code: 0, stdout: 'state = running\npid = 101\n', stderr: '' } : { code: 1, stdout: '', stderr: 'Could not find service' };
+      if (args[1] === 'bootout') active = false;
+      if (args[1] === 'bootstrap') active = true;
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (args[1] === 'version') return { code: 0, stdout: `sing-box version ${await readFile(args[0], 'utf8')}\n`, stderr: '' };
+    if (args[1] === 'check') return { code: rejectCandidate && args[0] !== paths.core ? 1 : 0, stdout: '', stderr: 'incompatible config' };
+    return run(args);
+  };
+  const states: AppModel[] = [], alerts: string[] = [], authorized: AppAction[] = [];
+  const downloader: Downloader = async (_url, destination, options) => {
+    downloads++;
+    options?.onProgress?.({ receivedBytes: 0, totalBytes: bytes.length });
+    await writeFile(destination, bytes);
+    options?.onProgress?.({ receivedBytes: bytes.length, totalBytes: bytes.length });
+  };
+  const owner = { uid: process.getuid!(), gid: process.getgid!() };
+  const controller = new AppController(new Service(paths, runner, { attempts: 4, interval: 1, stableSamples: 1 }), owner,
+    async action => {
+      authorized.push(action);
+      await withLock(paths, async () => {}, 100);
+      if (action === 'upgrade') {
+        expect(downloads).toBe(1);
+        expect(states.some(state => state.upgradeLabel === 'Upgrading (100%)')).toBe(true);
+        expect(calls.some(args => args[1] === 'check' && args[0].includes('/extracted/'))).toBe(true);
+      }
+      throw new AuthorizationCancelled();
+    }, model => states.push({ ...model }), message => alerts.push(message), async () => Response.json(release), downloader, join(root, 'cache'), 'arm64');
+  return { root, paths, controller, states, alerts, authorized, get downloads() { return downloads; }, set active(value: boolean) { active = value; }, set rejectCandidate(value: boolean) { rejectCandidate = value; } };
+}
+test('the installed version, service state, and stale Start/Pause actions need no authorization', async () => {
+  const f = await fixture(true); await f.controller.refresh();
+  expect(f.controller.model.status).toBe('running'); expect(f.controller.model.version).toBe('1.0.0');
+  await f.controller.changeState('start');
+  f.active = false;
+  await f.controller.changeState('pause');
+  expect(f.authorized).toEqual([]); expect(f.controller.model.status).toBe('paused');
+});
+test('a paused upgrade streams progress and replaces the core without authorization or starting it', async () => {
+  const f = await fixture(); await f.controller.upgrade();
+  expect(f.authorized).toEqual([]); expect(f.downloads).toBe(1);
+  expect(await readFile(f.paths.core, 'utf8')).toBe('1.1.0');
+  expect(f.controller.model.status).toBe('paused'); expect(f.controller.model.version).toBe('1.1.0');
+  expect(f.states.some(state => state.busy && state.upgradeLabel === 'Upgrading (100%)')).toBe(true);
+});
+test('running upgrades authorize after download and candidate validation; cancellation preserves the core', async () => {
+  const f = await fixture(true); await f.controller.upgrade();
+  expect(f.authorized).toEqual(['upgrade']); expect(f.alerts).toEqual([]);
+  expect(await readFile(f.paths.core, 'utf8')).toBe('1.0.0'); expect(f.controller.model.status).toBe('running');
+  expect(f.controller.model.busy).toBe(false);
+});
+test('incompatible updates fail before asking for authorization or replacing the core', async () => {
+  const f = await fixture(true); f.rejectCandidate = true; await f.controller.upgrade();
+  expect(f.authorized).toEqual([]); expect(f.alerts.join()).toContain('incompatible config');
+  expect(await readFile(f.paths.core, 'utf8')).toBe('1.0.0'); expect(f.controller.model.busy).toBe(false);
+});
+test('up-to-date installs do not download or authorize', async () => {
+  const f = await fixture(true, '1.0.0'); await f.controller.upgrade();
+  expect(f.downloads).toBe(0); expect(f.authorized).toEqual([]); expect(f.alerts).toEqual(['sing-box is already up to date.']);
+});
+test('Start validates before authorization, and cancellation leaves a paused service paused', async () => {
+  const f = await fixture(); await f.controller.changeState('start');
+  expect(f.authorized).toEqual(['start']); expect(f.controller.model.status).toBe('paused'); expect(f.alerts).toEqual([]);
+});
+test('version checks never downgrade a newer installed core', () => {
+  expect(newerVersion('1.14.4', '1.15.0')).toBe(false);
+  expect(newerVersion('1.14.4', '1.14.4')).toBe(false);
+  expect(newerVersion('1.14.4', '1.14.4-beta.1')).toBe(true);
+  expect(newerVersion('1.15.0', '1.14.4')).toBe(true);
+});

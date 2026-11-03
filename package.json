@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "bun src/cli.ts",
     "build": "bun scripts/build.mjs",
+    "build:app": "bun scripts/build-app.mjs",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },

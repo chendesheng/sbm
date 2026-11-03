@@ -260,15 +260,21 @@ describe('installation', () => {
   });
   test('interrupted download leaves the installed core intact', async () => {
     const f = await fixture(); const release = await releaseFixture(f);
-    const interrupted: Downloader = async () => { throw new Error('curl download failed (exit 18).'); };
-    await expect(install(f.service, undefined, release.fetcher, 'arm64', interrupted, join(f.base, 'cache'))).rejects.toThrow('curl download failed');
+    const interrupted: Downloader = async () => { throw new Error('Download interrupted.'); };
+    await expect(install(f.service, undefined, release.fetcher, 'arm64', interrupted, join(f.base, 'cache'))).rejects.toThrow('Download interrupted');
     expect(await f.service.version()).toBe('1.0.0');
   });
 });
 test('concurrent mutations are serialized and locks are released after failure', async () => {
   const f = await fixture(); const events: string[] = [];
+  let acquired = () => {};
+  const ready = new Promise<void>(resolve => { acquired = resolve; });
+  const first = withLock(f.paths, async () => { events.push('first'); acquired(); await Bun.sleep(50); events.push('first done'); });
+  // mkdir acquisition order is unspecified: queue the competitor only after
+  // the first operation owns the lock, rather than assuming Promise FIFO.
+  await ready;
   await Promise.all([
-    withLock(f.paths, async () => { events.push('first'); await Bun.sleep(50); events.push('first done'); }),
+    first,
     withLock(f.paths, async () => { events.push('second'); }),
   ]);
   expect(events).toEqual(['first', 'first done', 'second']);

@@ -1,6 +1,6 @@
 # sbm
 
-A small macOS command-line manager for [sing-box](https://github.com/SagerNet/sing-box), written in TypeScript and compiled to native code with [ScriptC](https://scriptc.dev). `sbm` exits after each command; launchd runs sing-box directly. Supports Apple Silicon and Intel Macs.
+A small macOS manager for [sing-box](https://github.com/SagerNet/sing-box), with a CLI and native menu bar app, written in TypeScript and compiled to native code with [ScriptC](https://scriptc.dev). The CLI exits after each command; launchd runs sing-box directly. Supports Apple Silicon and Intel Macs.
 
 ## Build and install the CLI
 
@@ -16,6 +16,27 @@ install -m 755 dist/sbm "$HOME/.local/bin/sbm"
 ```
 
 The compiled executable requires neither Bun nor Node.js on the target machine. ScriptC links its own native support code, with no JavaScript engine. Builds use the host architecture: build on arm64 for arm64 and on Intel for x64. Add `~/.local/bin` to your `PATH` if necessary; installing the CLI there needs no sudo.
+
+## Menu bar app
+
+Set up the core and a saved configuration with the CLI first, then build and install the app in your user Applications folder:
+
+```sh
+bun run build:app
+mkdir -p "$HOME/Applications"
+ditto dist/sbm.app "$HOME/Applications/sbm.app"
+open "$HOME/Applications/sbm.app"
+```
+
+The app requires macOS 14 or later and the same build dependencies as the CLI. It is locally ad-hoc signed. No Node.js, Bun, or separate JavaScript engine is needed to run it.
+
+The menu bar uses **🟢** for a running sing-box process, **🔴** for paused, and **🟡** while the state is unknown or launchd is waiting. This reports process state, not destination connectivity. The menu shows the installed sing-box version, one **Start/Pause** item, **Upgrade**, and **Quit sbm**. Status refreshes every five seconds and reflects CLI changes. Opening or quitting the app never starts or pauses sing-box.
+
+Upgrade checks the latest stable official release and leaves a newer or equal installed version alone. During download the Upgrade item is disabled and displays **Upgrading (42%)**, or a received byte count when the server gives no total size. It continues updating with the menu open. Checksum verification, executable-version verification, and saved-config validation finish before any administrator request. A paused core is replaced without elevation and stays paused. A running upgrade requests native macOS authorization only for activation/restart, with rollback on failure. Start/Pause also requests native authorization only when a service change is needed. Cancelling the password dialog leaves the operation unapplied. Errors and up-to-date notices use native alerts; no terminal is opened.
+
+The AppKit menu is a small Objective-C bridge called through ScriptC's C FFI. A native `node:worker_threads` worker runs the shared TypeScript service, download, and install modules so AppKit's menu tracking loop cannot stall downloads. A bundled, short-lived `sbm-control` executable uses the same modules for authorized service changes. The app never invokes the sbm CLI and never migrates legacy storage automatically.
+
+For a safe UI preview, run `dist/sbm.app/Contents/MacOS/sbm --demo`. It simulates status and upgrade progress without touching the service. `--ui-check` checks live progress during native menu tracking and exits automatically; `--worker-check` checks compiled worker/FFI startup without opening a menu.
 
 ### Native compiler
 
@@ -44,7 +65,7 @@ sbm config backup --file /path/to/sbm-backup.zip
 sbm config restore --file /path/to/sbm-backup.zip
 ```
 
-`status`, route listing/editing, and configuration backup run without sudo. The core and managed data belong to your user under `~/Library/Application Support/sbm/`. Installing or updating a paused core also needs no sudo; updating a running core requests authorization to restart the system service. A same-version install does not request authorization. Run commands without a `sudo` prefix so downloads remain unprivileged. Progress messages identify each stage; curl uses its default progress display.
+`status`, route listing/editing, and configuration backup run without sudo. The core and managed data belong to your user under `~/Library/Application Support/sbm/`. Installing or updating a paused core also needs no sudo; updating a running core requests authorization to restart the system service. A same-version install does not request authorization. Run commands without a `sudo` prefix so downloads remain unprivileged. Progress messages identify each stage; downloads use the shared streaming JavaScript downloader instead of a curl subprocess.
 
 Starting or pausing the system service, changing boot registration, and restoring a backup still request sudo when needed. An already-running plain `start`, already-paused `pause`, and already-disabled `disable` return without elevation. Cancelling authorization leaves the requested operation unapplied. Boot startup defaults to disabled. There is no `stop` or `logs` command.
 
@@ -52,7 +73,7 @@ Starting or pausing the system service, changing boot registration, and restorin
 
 `pause` unloads the job so launchd cannot immediately restart it. An enabled boot service starts again after reboot; a disabled one stays paused. `enable` and `disable` only change the boot registration. To stay stopped across reboot, use both `pause` and `disable`.
 
-`install` and `upgrade` look up the same official release through GitHub's API, download the native macOS archive using system curl with its default progress display, verify its published SHA-256 digest and reported core version, and check the saved configuration before replacing the core. Releases without a published SHA-256 digest are rejected. The same installed version leaves the service and installed files unchanged. Release metadata is checked each time, but a checksum-valid cached archive is reused without downloading the binary again. A running service is restarted after replacement; a paused service stays paused. Failed activation restores the previous binary and active state. Downloads and validation occur before pausing the old core. After sudo, installation rechecks a private snapshot of the archive and validates the saved configuration before replacing anything. Cancelling sudo removes the temporary handoff files and leaves managed state unchanged; the verified archive stays cached for the next attempt. Network/API rate-limit failures leave the installation unchanged. No GitHub token is required or read.
+`install` and `upgrade` look up the same official release through GitHub's API, stream the native macOS archive using JavaScript fetch, verify its published SHA-256 digest and reported core version, and check the saved configuration before replacing the core. Downloads and redirects must use HTTPS, with timeouts and partial-file cleanup. Releases without a published SHA-256 digest are rejected. The same installed version leaves the service and installed files unchanged. Release metadata is checked each time, but a checksum-valid cached archive is reused without downloading the binary again. A running service is restarted after replacement; a paused service stays paused. Failed activation restores the previous binary and active state. Downloads and validation occur before pausing the old core. After sudo, installation rechecks a private snapshot of the archive and validates the saved configuration before replacing anything. Cancelling sudo removes the temporary handoff files and leaves managed state unchanged; the verified archive stays cached for the next attempt. Network/API rate-limit failures leave the installation unchanged. No GitHub token is required or read.
 
 Concurrent mutating commands wait for a filesystem lock for up to 30 seconds. After an abrupt CLI termination, the error identifies the lock directory and its `pid` file; confirm no sbm operation is still running before removing a stale lock.
 
@@ -66,7 +87,7 @@ Concurrent mutating commands wait for a filesystem lock for up to 30 seconds. Af
 
 `sbm status` runs without sudo and prints the invoking user's cache folder and its total regular-file size, including nested entries, in readable units and exact bytes. A missing cache reports `0 B`; symbolic links are not followed. An explicit `sudo sbm status` still reports the original user's cache. Service state remains available when private data belongs to another user or has not yet been migrated; inaccessible fields report unavailable.
 
-Verified core archives are kept in `~/Library/Caches/sbm/<release-and-architecture>/<sha256>.tar.gz`. Installation checks the release metadata, reuses a matching checksum-valid archive, and verifies its executable version. Authorization is requested only when activation needs a service restart or a legacy storage migration. Missing or corrupt archives are downloaded using curl's default progress display. Cache entries are keyed by version, architecture, and published checksum so changed releases cannot reuse stale bytes. Partial downloads are never promoted to completed cache entries. The cache survives cancelled sudo requests and installation failures. Remove this directory to clear it; this does not affect the installed core or saved configuration.
+Verified core archives are kept in `~/Library/Caches/sbm/<release-and-architecture>/<sha256>.tar.gz`. Installation checks the release metadata, reuses a matching checksum-valid archive, and verifies its executable version. Authorization is requested only when activation needs a service restart or a legacy storage migration. Missing or corrupt archives are streamed into exclusive private temporary files; the app receives incremental byte counts for progress. Cache entries are keyed by version, architecture, and published checksum so changed releases cannot reuse stale bytes. Partial downloads are never promoted to completed cache entries. The cache survives cancelled sudo requests and installation failures. Remove this directory to clear it; this does not affect the installed core or saved configuration.
 
 ## Configuration, assets, and logs
 
@@ -117,6 +138,8 @@ bun run build
 env -i PATH=/usr/bin:/bin ./dist/sbm --help
 ```
 
-All tests live under `test/` and run together with `bun test`. The suite builds the CLI automatically and includes source tests plus two compiled tests. The native test covers CLI/self invocation, subprocess errors and timeouts, exclusive binary writes and permissions, routes, locks, backup ownership, restore, and rollback. ScriptC compiles the programs in `test/fixtures/`, and the test runner executes them with Bun and Node.js absent from `PATH`.
+All tests live under `test/` and run together with `bun test`. The suite builds the CLI automatically and includes source and compiled tests. The native test covers CLI/self invocation, subprocess errors and timeouts, exclusive binary writes and permissions, routes, locks, backup ownership, restore, and rollback. ScriptC compiles the programs in `test/fixtures/`, and the test runner executes them with Bun and Node.js absent from `PATH`.
+
+App tests cover paused/running updates, validation before authorization, cancellation, stale Start/Pause clicks, and version comparisons. Downloader tests cover binary streams, byte progress, redirects, size mismatches, cancellation, and cleanup. Compiled tests verify a real chunked network response with incremental progress, an official HTTPS core download into a disposable cache without activation, and the app's native worker/FFI startup with no Node or Bun on `PATH`.
 
 The launchd test runs as part of the same suite. Run tests as your logged-in macOS user with Xcode Command Line Tools installed and network access to GitHub. It downloads or reuses the verified official core, exercises the same lifecycle code in a disposable **user** launchd domain, and verifies actual SOCKS traffic to a loopback HTTP server before and after moving the core and configuration to a user Library path. It removes its job and files afterwards. Source and compiled tests also cover migration rollback, path collisions, ownership records, unprivileged status, paused core updates, and cancellation before a running update. Privileged system-service activation, password-prompt cancellation, actual reboot persistence, Intel builds, and real TUN/private-network traffic still require separate runtime verification.

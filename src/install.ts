@@ -4,12 +4,18 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Service, errorMessage, coreVersion } from './service';
 import { checked, exists, atomicWrite, optionalRead, restoreFile, run, type Runner } from './system';
-import { download, type Downloader } from './download';
+import { download, type Downloader, type DownloadProgress } from './download';
 import { defaultCacheRoot } from './cache';
 import { withDataLock, type Owner } from './storage';
 
 type Asset = { name: string; browser_download_url: string; digest?: string | null };
-type Release = { tag_name: string; draft: boolean; prerelease: boolean; assets: Asset[] };
+export type Release = { tag_name: string; draft: boolean; prerelease: boolean; assets: Asset[] };
+export type PreparationOptions = {
+  release?: Release;
+  signal?: AbortSignal;
+  onProgress?: (progress: DownloadProgress) => void;
+  onStage?: (stage: string) => void;
+};
 export type Fetcher = (url: string) => Promise<Response>;
 export const fetchRelease: Fetcher = async (url) => fetch(url, {
   headers: { 'User-Agent': 'sbm/0.1.0', Accept: 'application/vnd.github+json' },
@@ -40,26 +46,33 @@ export async function install(service: Service, requested?: string, fetcher = fe
   return withPreparedInstall(requested, directory => activatePreparedInstall(service, directory, arch), fetcher, arch, downloader, service.runner, cacheRoot);
 }
 
-async function cachedArchive(asset: Asset, folder: string, downloader: Downloader, cacheRoot: string): Promise<Buffer> {
+async function cachedArchive(asset: Asset, folder: string, downloader: Downloader, cacheRoot: string, options: PreparationOptions): Promise<Buffer> {
   const directory = join(cacheRoot, folder);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const cached = join(directory, `${asset.digest!.slice(7).toLowerCase()}.tar.gz`);
   if (await exists(cached)) {
     const archive = await readFile(cached);
+    let verified = false;
     try {
       verifyArchive(archive, asset);
-      console.log(`Using cached archive: ${cached}`);
-      return archive;
+      verified = true;
     } catch {
       console.log('Cached archive failed checksum verification; downloading it again.');
       await rm(cached, { force: true });
     }
+    if (verified) {
+      console.log(`Using cached archive: ${cached}`);
+      options.onStage?.('Verifying cached download…');
+      return archive;
+    }
   }
   console.log(`Downloading ${asset.name}...`);
+  options.onStage?.('Upgrading (0%)');
   const stage = await mkdtemp(join(directory, '.download-'));
   try {
     const candidate = join(stage, 'release.tar.gz');
-    await downloader(asset.browser_download_url, candidate);
+    await downloader(asset.browser_download_url, candidate, { signal: options.signal, onProgress: options.onProgress });
+    options.onStage?.('Verifying download…');
     const archive = await readFile(candidate);
     verifyArchive(archive, asset);
     await rename(candidate, cached);
@@ -69,13 +82,15 @@ async function cachedArchive(asset: Asset, folder: string, downloader: Downloade
 }
 
 // Prepare in the caller's user cache and private temporary directory, never managed state.
-export async function withPreparedInstall<T>(requested: string | undefined, activate: (directory: string) => Promise<T>, fetcher = fetchRelease, arch = process.arch, downloader: Downloader = download, runner: Runner = run, cacheRoot = defaultCacheRoot()): Promise<T> {
+export async function withPreparedInstall<T>(requested: string | undefined, activate: (directory: string) => Promise<T>, fetcher = fetchRelease, arch = process.arch, downloader: Downloader = download, runner: Runner = run, cacheRoot = defaultCacheRoot(), options: PreparationOptions = {}): Promise<T> {
+  if (options.signal?.aborted) throw new Error('Upgrade cancelled.');
   console.log(requested ? `Checking sing-box ${requested} release...` : 'Checking the latest stable sing-box release...');
-  const metadata = await (await response(fetcher, releaseEndpoint(requested))).json() as Release;
+  const metadata = options.release || await (await response(fetcher, releaseEndpoint(requested))).json() as Release;
   if (!requested && metadata.prerelease) throw new Error('Latest stable release unexpectedly resolves to a prerelease.');
   if (requested && metadata.tag_name !== `v${requested.replace(/^v/, '')}`) throw new Error('Release version does not match the requested version.');
   const { asset, version, folder } = selectAsset(metadata, arch);
-  const archive = await cachedArchive(asset, folder, downloader, cacheRoot);
+  const archive = await cachedArchive(asset, folder, downloader, cacheRoot, options);
+  if (options.signal?.aborted) throw new Error('Upgrade cancelled.');
   const stage = await mkdtemp(join(tmpdir(), 'sbm-download-'));
   try {
     const archivePath = join(stage, 'release.tar.gz');
@@ -88,6 +103,7 @@ export async function withPreparedInstall<T>(requested: string | undefined, acti
     if (await coreVersion(runner, binary) !== version) throw new Error('Downloaded core reports an unexpected version.');
     await atomicWrite(join(stage, 'release.json'), JSON.stringify(metadata));
     console.log(`Verified sing-box ${version}.`);
+    if (options.signal?.aborted) throw new Error('Upgrade cancelled.');
     return await activate(stage);
   } finally { await rm(stage, { recursive: true, force: true }); }
 }

@@ -26,3 +26,13 @@ test('compiled native CLI, subprocesses, private files, routes, locks, backup/re
 test('compiled manager with real launchd, sing-box and loopback SOCKS traffic', async () => {
   expect(await compiledFixture('launchd')).toContain('PASS: official core, real launchd');
 }, 300_000);
+
+test('native fetch downloads stream progress without curl', async () => {
+  expect(await compiledFixture('download')).toContain('PASS: native fetch streaming');
+}, 300_000);
+
+test('menu bar app builds and calls its C bridge from a native worker without Node or Bun', async () => {
+  await execute([process.execPath, 'scripts/build-app.mjs']);
+  const output = await execute([resolve(root, 'dist/sbm.app/Contents/MacOS/sbm'), '--worker-check'], { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' });
+  expect(output).toContain('PASS: ScriptC worker thread calls the native C bridge.');
+}, 300_000);
