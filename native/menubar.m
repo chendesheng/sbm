@@ -115,6 +115,9 @@ static NSImage *statusDot(NSColor *color) {
     self.stateLabel = [NSTextField labelWithString:@"Checking…"];
     self.stateLabel.frame = NSMakeRect(90, 15, 156, 20);
     self.stateLabel.font = [NSFont systemFontOfSize:13]; self.stateLabel.textColor = NSColor.secondaryLabelColor;
+    // Align the light with the visible capitals, rather than the text field's padding.
+    CGFloat textCenter = NSMaxY(self.stateLabel.frame) - self.stateLabel.firstBaselineOffsetFromTop + self.stateLabel.font.capHeight / 2;
+    [self.stateDot setFrameOrigin:NSMakePoint(77, textCenter - 4)];
     [header addSubview:self.stateLabel]; self.stateItem.view = header;
     [items addItem:[NSMenuItem separatorItem]];
     self.versionItem = [items addItemWithTitle:@"sing-box —" action:nil keyEquivalent:@""];
