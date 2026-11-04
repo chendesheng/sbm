@@ -31,6 +31,10 @@ test('native fetch downloads stream progress without curl', async () => {
   expect(await compiledFixture('download')).toContain('PASS: native fetch streaming');
 }, 300_000);
 
+test('compiled VPS client controls exits and WPS through the panel API', async () => {
+  expect(await compiledFixture('vps')).toContain('PASS: native VPS transport');
+}, 300_000);
+
 test('menu bar app builds and calls its C bridge from a native worker without Node or Bun', async () => {
   await execute([process.execPath, 'scripts/build-app.mjs']);
   const output = await execute([resolve(root, 'dist/sbm.app/Contents/MacOS/sbm'), '--worker-check'], { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' });
