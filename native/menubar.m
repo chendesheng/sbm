@@ -10,6 +10,13 @@
 @property NSMenuItem *toggleItem;
 @property NSMenuItem *upgradeItem;
 @property NSMenuItem *quitItem;
+@property NSArray<NSMenuItem *> *vpsItems;
+@property NSMenuItem *exitItem;
+@property NSArray<NSMenuItem *> *exitChoices;
+@property NSMenuItem *wpsItem;
+@property NSSwitch *wpsSwitch;
+@property BOOL wpsEnabled;
+@property NSInteger wpsRevision;
 @property BOOL loaded;
 @property BOOL busy;
 - (void)receive:(NSDictionary *)message;
@@ -116,6 +123,7 @@ static BOOL menuTitleFits(NSString *title) {
     self.item.button.toolTip = @"sbm — checking sing-box";
     NSMenu *items = [[NSMenu alloc] initWithTitle:@"sbm"];
     items.autoenablesItems = NO;
+    items.showsStateColumn = NO;
     items.delegate = self;
     self.stateItem = [items addItemWithTitle:@"Checking…" action:nil keyEquivalent:@""];
     NSView *header = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 260, 72)];
@@ -142,6 +150,38 @@ static BOOL menuTitleFits(NSString *title) {
     self.toggleItem.target = self; self.toggleItem.enabled = NO;
     self.upgradeItem = [items addItemWithTitle:@"Checking…" action:@selector(upgrade:) keyEquivalent:@""];
     self.upgradeItem.target = self; self.upgradeItem.enabled = NO;
+    NSMenuItem *vpsSeparator = [NSMenuItem separatorItem];
+    NSMenuItem *vpsHeader = [NSMenuItem sectionHeaderWithTitle:@"VPS"];
+    [items addItem:vpsSeparator];
+    [items addItem:vpsHeader];
+    self.exitItem = [items addItemWithTitle:@"Exit" action:nil keyEquivalent:@""];
+    if (@available(macOS 14.4, *)) self.exitItem.subtitle = @"Checking…";
+    NSMenu *exits = [[NSMenu alloc] initWithTitle:@"Exit"];
+    exits.autoenablesItems = NO;
+    NSMutableArray *choices = [NSMutableArray array];
+    NSArray *names = @[@"DMIT direct", @"Japan", @"Los Angeles"];
+    for (NSInteger index = 0; index < names.count; index++) {
+        NSMenuItem *choice = [exits addItemWithTitle:names[index] action:@selector(selectExit:) keyEquivalent:@""];
+        choice.target = self; choice.tag = 10 + index; choice.enabled = NO;
+        [choices addObject:choice];
+    }
+    self.exitChoices = choices; self.exitItem.submenu = exits;
+    self.wpsItem = [items addItemWithTitle:@"WPS tunnel" action:@selector(toggleWps:) keyEquivalent:@""];
+    self.wpsItem.target = self;
+    NSView *wpsRow = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 280, 32)];
+    wpsRow.autoresizingMask = NSViewWidthSizable;
+    NSTextField *wpsTitle = [NSTextField labelWithString:@"WPS tunnel"];
+    wpsTitle.font = [NSFont menuFontOfSize:0]; wpsTitle.frame = NSMakeRect(14, 7, 196, 18);
+    wpsTitle.alignment = NSTextAlignmentLeft;
+    [wpsRow addSubview:wpsTitle];
+    self.wpsSwitch = [[NSSwitch alloc] initWithFrame:NSMakeRect(224, 4, 38, 24)];
+    self.wpsSwitch.autoresizingMask = NSViewMinXMargin;
+    self.wpsSwitch.controlSize = NSControlSizeSmall; self.wpsSwitch.enabled = NO;
+    self.wpsSwitch.target = self; self.wpsSwitch.action = @selector(toggleWps:);
+    self.wpsSwitch.accessibilityLabel = @"WPS tunnel";
+    [wpsRow addSubview:self.wpsSwitch]; self.wpsItem.view = wpsRow;
+    self.vpsItems = @[vpsSeparator, vpsHeader, self.exitItem, self.wpsItem];
+    for (NSMenuItem *item in self.vpsItems) item.hidden = YES;
     [items addItem:[NSMenuItem separatorItem]];
     self.quitItem = [items addItemWithTitle:@"Quit sbm" action:@selector(quit:) keyEquivalent:@"q"];
     self.quitItem.target = self;
@@ -159,20 +199,36 @@ static BOOL menuTitleFits(NSString *title) {
         __block NSUInteger changes = 0;
         __block BOOL sawChecking = NO;
         __block BOOL startedUpgrade = NO;
+        __block NSInteger vpsStep = 0;
         NSDate *started = [NSDate date];
         NSTimer *monitor = [NSTimer timerWithTimeInterval:0.15 repeats:YES block:^(NSTimer *timer) {
+            if (vpsStep == 0 && self.exitChoices[1].enabled && self.wpsSwitch.enabled) {
+                [self selectExit:self.exitChoices[1]]; [self.wpsSwitch performClick:nil]; vpsStep = 1;
+                if (self.wpsSwitch.state != NSControlStateValueOn || !self.wpsSwitch.enabled) vpsStep = -1;
+            } else if (vpsStep == 1 && self.exitChoices[1].state == NSControlStateValueOn && self.wpsSwitch.state == NSControlStateValueOn) {
+                [self selectExit:self.exitChoices[2]]; [self.wpsSwitch performClick:nil]; vpsStep = 2;
+            } else if (vpsStep == 2 && self.exitChoices[2].state == NSControlStateValueOn && self.wpsSwitch.state == NSControlStateValueOff) {
+                [self selectExit:self.exitChoices[0]]; vpsStep = 3;
+            } else if (vpsStep == 3 && self.exitChoices[0].state == NSControlStateValueOn) {
+                [self toggle:nil]; vpsStep = 4;
+            } else if (vpsStep == 4 && [self.stateLabel.stringValue isEqual:@"Paused"]
+                && [self.vpsItems filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"hidden == NO"]].count == 0) {
+                [self toggle:nil]; vpsStep = 5;
+            } else if (vpsStep == 5 && [self.stateLabel.stringValue isEqual:@"Running"]
+                && [self.vpsItems filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"hidden == YES"]].count == 0) vpsStep = 6;
             NSString *title = self.upgradeItem.title;
             if ([title isEqual:@"Checking…"] && !self.upgradeItem.enabled && self.toggleItem.enabled) sawChecking = YES;
-            if (sawChecking && !startedUpgrade && [title hasPrefix:@"Upgrade to "] && self.upgradeItem.enabled && menuTitleFits(title)) {
+            if (vpsStep == 6 && sawChecking && !startedUpgrade && [title hasPrefix:@"Upgrade to "] && self.upgradeItem.enabled && menuTitleFits(title)) {
                 startedUpgrade = YES; [self upgrade:nil];
             }
             if ([title hasPrefix:@"Upgrading ("] && ![title isEqual:previousTitle] && menuTitleFits(title)) {
                 previousTitle = [title copy]; changes++;
             }
-            BOOL passed = sawChecking && startedUpgrade && changes >= 3 && !self.upgradeItem.enabled && !self.toggleItem.enabled
+            BOOL passed = vpsStep == 6 && sawChecking && startedUpgrade && changes >= 3 && !self.upgradeItem.enabled && !self.toggleItem.enabled
                 && self.item.button.image.isTemplate && self.item.button.title.length == 0
                 && [self.stateLabel.stringValue isEqual:@"Running"];
             if (passed || -[started timeIntervalSinceNow] > 8) {
+                if (!passed) fprintf(stderr, "UI check failed: vps=%ld checking=%d upgrade=%d changes=%lu title=%s\n", (long)vpsStep, sawChecking, startedUpgrade, (unsigned long)changes, title.UTF8String);
                 interfaceResult = passed ? 0 : 1;
                 [timer invalidate]; [self.item.menu cancelTracking]; [NSApp stop:nil];
                 NSEvent *wake = [NSEvent otherEventWithType:NSEventTypeApplicationDefined location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil subtype:0 data1:0 data2:0];
@@ -195,6 +251,18 @@ static BOOL menuTitleFits(NSString *title) {
 }
 - (void)toggle:(id)sender { [self sendAction:self.loaded ? 2 : 1]; }
 - (void)upgrade:(id)sender { [self sendAction:3]; }
+- (void)selectExit:(NSMenuItem *)sender {
+    if (!sender.enabled || sender.state == NSControlStateValueOn) return;
+    for (NSMenuItem *choice in self.exitChoices) choice.enabled = NO;
+    @synchronized ([SbmMenu class]) { [actions addObject:@(sender.tag)]; }
+}
+- (void)toggleWps:(id)sender {
+    if (!self.wpsSwitch.enabled) return;
+    self.wpsEnabled = !self.wpsEnabled;
+    ++self.wpsRevision;
+    self.wpsSwitch.state = self.wpsEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    @synchronized ([SbmMenu class]) { [actions addObject:self.wpsEnabled ? @13 : @14]; }
+}
 - (void)quit:(id)sender { if (!self.busy) [NSApp terminate:nil]; }
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
     if (self.busy) return NSTerminateCancel;
@@ -205,6 +273,7 @@ static BOOL menuTitleFits(NSString *title) {
     NSString *kind = message[@"kind"];
     if ([kind isEqual:@"state"]) {
         NSInteger state = [message[@"status"] integerValue];
+        for (NSMenuItem *item in self.vpsItems) item.hidden = state != 1;
         NSString *label = state == 1 ? @"Running" : state == 2 ? @"Paused" : @"Checking / waiting";
         self.item.button.toolTip = [NSString stringWithFormat:@"sbm — %@", label];
         self.stateItem.title = label;
@@ -232,6 +301,24 @@ static BOOL menuTitleFits(NSString *title) {
             [self.item.menu insertItem:self.upgradeItem atIndex:index];
         }
         self.quitItem.enabled = !self.busy;
+    } else if ([kind isEqual:@"vps"]) {
+        NSString *label = message[@"exitLabel"];
+        if (@available(macOS 14.4, *)) self.exitItem.subtitle = label;
+        else self.exitItem.title = [@"Exit — " stringByAppendingString:label];
+        NSArray *modes = @[@"off", @"japan", @"usa_la"];
+        for (NSInteger index = 0; index < self.exitChoices.count; index++) {
+            NSMenuItem *choice = self.exitChoices[index];
+            BOOL selected = [modes[index] isEqual:message[@"mode"]];
+            choice.state = selected ? NSControlStateValueOn : NSControlStateValueOff;
+            choice.enabled = [message[@"exitAvailable"] boolValue];
+        }
+        // A worker/status message predating a click must not move the switch back.
+        if ([message[@"wpsRevision"] integerValue] >= self.wpsRevision) {
+            self.wpsEnabled = [message[@"wpsEnabled"] boolValue];
+            self.wpsSwitch.state = self.wpsEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+            self.wpsSwitch.enabled = [message[@"wpsAvailable"] boolValue];
+            self.wpsSwitch.accessibilityHelp = message[@"wpsLabel"];
+        }
     } else if ([kind isEqual:@"alert"]) {
         [NSApp activateIgnoringOtherApps:YES];
         NSAlert *alert = [[NSAlert alloc] init];
@@ -276,7 +363,7 @@ int32_t sbm_run(uint8_t check) {
         application.delegate = menu;
         [application run];
         @synchronized ([SbmMenu class]) { closing = YES; }
-        if (interfaceTest && interfaceResult == 0) fprintf(stdout, "PASS: native menu stays responsive and progress updates while open.\n");
+        if (interfaceTest && interfaceResult == 0) fprintf(stdout, "PASS: native menu stays responsive and progress updates while open; VPS controls update, hide when paused and return when running.\n");
         return interfaceTest ? interfaceResult : 0;
     }
 }
@@ -289,6 +376,13 @@ void sbm_render(int32_t status, const uint8_t *version, size_t versionLength, ui
             @"busy": @(busy), @"loaded": @(loaded), @"canStart": @(canStart), @"canUpgrade": @(canUpgrade), @"upgradeLabel": text(upgrade, upgradeLength) };
         @synchronized ([SbmMenu class]) { lastModel = message; }
         onMain(message);
+    }
+}
+void sbm_render_vps(const uint8_t *mode, size_t modeLength, const uint8_t *exitLabel, size_t exitLength,
+                    uint8_t exitAvailable, uint8_t wpsEnabled, const uint8_t *wpsLabel, size_t wpsLength, uint8_t wpsAvailable, int32_t wpsRevision) {
+    @autoreleasepool {
+        onMain(@{ @"kind": @"vps", @"mode": text(mode, modeLength), @"exitLabel": text(exitLabel, exitLength),
+            @"exitAvailable": @(exitAvailable), @"wpsEnabled": @(wpsEnabled), @"wpsLabel": text(wpsLabel, wpsLength), @"wpsAvailable": @(wpsAvailable), @"wpsRevision": @(wpsRevision) });
     }
 }
 int32_t sbm_action(void) {

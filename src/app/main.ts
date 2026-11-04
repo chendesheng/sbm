@@ -4,20 +4,31 @@ import { managedStorage } from '../storage';
 import { Service, errorMessage } from '../service';
 import { run } from '../system';
 import { AppController, AuthorizationCancelled, type AppAction, type AppModel } from './controller';
-import { nativeRun, nativeRender, nativeAction, nativeAuthorize, nativeAuthorizationResult, nativeAlert, nativeClosing, nativeMainThread } from './native';
+import { nativeRun, nativeRender, nativeRenderVps, nativeAction, nativeAuthorize, nativeAuthorizationResult, nativeAlert, nativeClosing, nativeMainThread } from './native';
+import { VpsClient, VpsController, exitModes, exitNames, type VpsModel } from './vps';
 
 function render(model: AppModel) {
   const status = model.status === 'running' ? 1 : model.status === 'paused' ? 2 : 0;
   nativeRender(status, model.version, model.busy, model.loaded, model.canStart, model.canUpgrade, model.upgradeLabel);
 }
 
+function renderVps(model: VpsModel) {
+  nativeRenderVps(model.mode, model.exitLabel, model.exitAvailable, model.wpsEnabled, model.wpsLabel, model.wpsAvailable, model.wpsRevision);
+}
+
 async function engine(demo: boolean, check = false) {
   if (demo) {
     let running = true, busy = false;
+    const vps: VpsModel = { mode: 'off', exitLabel: 'DMIT direct', exitAvailable: true, wpsEnabled: false, wpsLabel: 'Off', wpsAvailable: true, wpsRevision: 0 };
+    renderVps(vps);
     const show = (label = 'Upgrade to 1.15.0') => render({ status: running ? 'running' : 'paused', version: 'Preview', busy, loaded: running, canStart: true, canUpgrade: label.startsWith('Upgrade to '), upgradeLabel: label });
     show();
     while (!nativeClosing()) {
       const action = nativeAction();
+      if (action >= 10 && action <= 12) {
+        vps.mode = exitModes[action - 10]; vps.exitLabel = exitNames[vps.mode]; renderVps(vps);
+      }
+      if (action === 13 || action === 14) { ++vps.wpsRevision; vps.wpsEnabled = action === 13; vps.wpsLabel = vps.wpsEnabled ? 'On' : 'Off'; renderVps(vps); }
       if (action === 1 || action === 2) { running = action === 1; show(); }
       if (action === 4) { show('Checking…'); await sleep(750); show(); }
       if (action === 3) {
@@ -39,7 +50,15 @@ async function engine(demo: boolean, check = false) {
       nativeAuthorize(action === 'start' ? 1 : action === 'pause' ? 2 : 3, directory);
     });
   };
-  const controller = new AppController(new Service(storage.paths, run), storage.owner, authorize, render, (message, error) => nativeAlert(message, error));
+  const vps = new VpsController(new VpsClient(), renderVps, message => nativeAlert(message, true));
+  let vpsRunning = false;
+  const controller = new AppController(new Service(storage.paths, run), storage.owner, authorize, model => {
+    render(model);
+    const running = model.status === 'running';
+    if (running && !vpsRunning && !check) void vps.refresh();
+    vpsRunning = running;
+  }, (message, error) => nativeAlert(message, error));
+  const refreshVps = () => { if (vpsRunning) void vps.refresh(); };
   await controller.refresh();
   if (check) { controller.alert('Native alert callback check.', false); return; }
   let lastRefresh = Date.now();
@@ -54,8 +73,10 @@ async function engine(demo: boolean, check = false) {
     const action = nativeAction();
     if (action === 1 || action === 2) void controller.changeState(action === 1 ? 'start' : 'pause');
     if (action === 3) void controller.upgrade();
-    if (action === 4) void controller.checkForUpdates();
-    if (Date.now() - lastRefresh >= 5000) { lastRefresh = Date.now(); void controller.refresh(); }
+    if (action === 4) { void controller.checkForUpdates(); refreshVps(); }
+    if (vpsRunning && action >= 10 && action <= 12) void vps.select(exitModes[action - 10]);
+    if (action === 13 || action === 14) void vps.setWps(action === 13, vpsRunning);
+    if (Date.now() - lastRefresh >= 5000) { lastRefresh = Date.now(); void controller.refresh().then(refreshVps); }
     await sleep(50);
   }
   controller.abort.abort();

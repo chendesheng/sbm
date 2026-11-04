@@ -31,6 +31,7 @@ execute('/usr/bin/xcrun', ['clang', '-fobjc-arc', '-fblocks', '-mmacosx-version-
 const functions = [
   { name: 'nativeRun', symbol: 'sbm_run', params: ['bool'], returns: 'i32' },
   { name: 'nativeRender', symbol: 'sbm_render', params: ['i32', 'string', 'bool', 'bool', 'bool', 'bool', 'string'], returns: 'void' },
+  { name: 'nativeRenderVps', symbol: 'sbm_render_vps', params: ['string', 'string', 'bool', 'bool', 'string', 'bool', 'i32'], returns: 'void' },
   { name: 'nativeAction', symbol: 'sbm_action', params: [], returns: 'i32' },
   { name: 'nativeAuthorize', symbol: 'sbm_authorize', params: ['i32', 'string'], returns: 'void' },
   { name: 'nativeAuthorizationResult', symbol: 'sbm_authorization_result', params: [
