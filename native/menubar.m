@@ -6,7 +6,7 @@
 @property NSMenuItem *stateItem;
 @property NSTextField *stateLabel;
 @property NSImageView *stateDot;
-@property NSMenuItem *versionItem;
+@property NSTextField *titleLabel;
 @property NSMenuItem *toggleItem;
 @property NSMenuItem *upgradeItem;
 @property NSMenuItem *quitItem;
@@ -122,9 +122,11 @@ static BOOL menuTitleFits(NSString *title) {
     NSImageView *appIcon = [[NSImageView alloc] initWithFrame:NSMakeRect(14, 12, 48, 48)];
     appIcon.image = [[NSImage alloc] initWithContentsOfFile:[[NSBundle mainBundle] pathForResource:@"AppIcon" ofType:@"icns"]];
     [header addSubview:appIcon];
-    NSTextField *name = [NSTextField labelWithString:@"sbm"];
-    name.frame = NSMakeRect(76, 37, 170, 23); name.font = [NSFont boldSystemFontOfSize:17];
-    [header addSubview:name];
+    self.titleLabel = [NSTextField labelWithString:@"sbm"];
+    self.titleLabel.frame = NSMakeRect(76, 37, 170, 23);
+    self.titleLabel.font = [NSFont boldSystemFontOfSize:17];
+    self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [header addSubview:self.titleLabel];
     self.stateDot = [[NSImageView alloc] initWithFrame:NSMakeRect(77, 21, 8, 8)];
     self.stateDot.image = statusDot(NSColor.systemYellowColor); [header addSubview:self.stateDot];
     self.stateLabel = [NSTextField labelWithString:@"Checking…"];
@@ -134,9 +136,7 @@ static BOOL menuTitleFits(NSString *title) {
     CGFloat textCenter = NSMaxY(self.stateLabel.frame) - self.stateLabel.firstBaselineOffsetFromTop + self.stateLabel.font.capHeight / 2;
     [self.stateDot setFrameOrigin:NSMakePoint(77, textCenter - 4)];
     [header addSubview:self.stateLabel]; self.stateItem.view = header;
-    [items addItem:[NSMenuItem separatorItem]];
-    self.versionItem = [items addItemWithTitle:@"sing-box —" action:nil keyEquivalent:@""];
-    self.stateItem.enabled = NO; self.versionItem.enabled = NO;
+    self.stateItem.enabled = NO;
     [items addItem:[NSMenuItem separatorItem]];
     self.toggleItem = [items addItemWithTitle:@"Start" action:@selector(toggle:) keyEquivalent:@""];
     self.toggleItem.target = self; self.toggleItem.enabled = NO;
@@ -210,8 +210,14 @@ static BOOL menuTitleFits(NSString *title) {
         self.stateItem.title = label;
         self.stateLabel.stringValue = label;
         self.stateDot.image = statusDot(state == 1 ? NSColor.systemGreenColor : state == 2 ? NSColor.systemRedColor : NSColor.systemYellowColor);
-        self.stateItem.view.accessibilityLabel = [NSString stringWithFormat:@"sbm, %@", label];
-        self.versionItem.title = [@"sing-box " stringByAppendingString:message[@"version"]];
+        NSString *version = message[@"version"];
+        self.stateItem.view.accessibilityLabel = [NSString stringWithFormat:@"sbm, sing-box %@, %@", version, label];
+        NSMutableAttributedString *title = [[NSMutableAttributedString alloc] initWithString:@"sbm"
+            attributes:@{ NSFontAttributeName: [NSFont boldSystemFontOfSize:17], NSForegroundColorAttributeName: NSColor.labelColor }];
+        [title appendAttributedString:[[NSAttributedString alloc] initWithString:[@"  " stringByAppendingString:version]
+            attributes:@{ NSFontAttributeName: [NSFont systemFontOfSize:12], NSForegroundColorAttributeName: NSColor.secondaryLabelColor }]];
+        self.titleLabel.attributedStringValue = title;
+        self.titleLabel.toolTip = [@"sing-box " stringByAppendingString:version];
         self.busy = [message[@"busy"] boolValue]; self.loaded = [message[@"loaded"] boolValue];
         self.toggleItem.title = self.loaded ? @"Pause" : @"Start";
         self.toggleItem.enabled = !self.busy && [message[@"canStart"] boolValue];
