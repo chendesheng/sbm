@@ -1,7 +1,7 @@
 #import <AppKit/AppKit.h>
 #include <stdint.h>
 
-@interface SbmMenu : NSObject <NSApplicationDelegate>
+@interface SbmMenu : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property NSStatusItem *item;
 @property NSMenuItem *stateItem;
 @property NSTextField *stateLabel;
@@ -93,6 +93,20 @@ static NSImage *statusDot(NSColor *color) {
     }];
 }
 
+static BOOL containsFittingMenuTitle(NSView *view, NSString *title) {
+    if ([view isKindOfClass:NSTextField.class]) {
+        NSTextField *field = (NSTextField *)view;
+        if ([field.stringValue isEqual:title]) return field.cell.cellSize.width <= field.bounds.size.width;
+    }
+    for (NSView *child in view.subviews) if (containsFittingMenuTitle(child, title)) return YES;
+    return NO;
+}
+
+static BOOL menuTitleFits(NSString *title) {
+    for (NSWindow *window in NSApp.windows) if (containsFittingMenuTitle(window.contentView, title)) return YES;
+    return NO;
+}
+
 @implementation SbmMenu
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     self.item = [[NSStatusBar systemStatusBar] statusItemWithLength:NSSquareStatusItemLength];
@@ -102,6 +116,7 @@ static NSImage *statusDot(NSColor *color) {
     self.item.button.toolTip = @"sbm — checking sing-box";
     NSMenu *items = [[NSMenu alloc] initWithTitle:@"sbm"];
     items.autoenablesItems = NO;
+    items.delegate = self;
     self.stateItem = [items addItemWithTitle:@"Checking…" action:nil keyEquivalent:@""];
     NSView *header = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 260, 72)];
     NSImageView *appIcon = [[NSImageView alloc] initWithFrame:NSMakeRect(14, 12, 48, 48)];
@@ -125,7 +140,7 @@ static NSImage *statusDot(NSColor *color) {
     [items addItem:[NSMenuItem separatorItem]];
     self.toggleItem = [items addItemWithTitle:@"Start" action:@selector(toggle:) keyEquivalent:@""];
     self.toggleItem.target = self; self.toggleItem.enabled = NO;
-    self.upgradeItem = [items addItemWithTitle:@"Upgrade" action:@selector(upgrade:) keyEquivalent:@""];
+    self.upgradeItem = [items addItemWithTitle:@"Checking…" action:@selector(upgrade:) keyEquivalent:@""];
     self.upgradeItem.target = self; self.upgradeItem.enabled = NO;
     [items addItem:[NSMenuItem separatorItem]];
     self.quitItem = [items addItemWithTitle:@"Quit sbm" action:@selector(quit:) keyEquivalent:@"q"];
@@ -142,13 +157,19 @@ static NSImage *statusDot(NSColor *color) {
         // fixture has no access to service controls or administrator requests.
         __block NSString *previousTitle = nil;
         __block NSUInteger changes = 0;
+        __block BOOL sawChecking = NO;
+        __block BOOL startedUpgrade = NO;
         NSDate *started = [NSDate date];
         NSTimer *monitor = [NSTimer timerWithTimeInterval:0.15 repeats:YES block:^(NSTimer *timer) {
             NSString *title = self.upgradeItem.title;
-            if ([title hasPrefix:@"Upgrading ("] && ![title isEqual:previousTitle]) {
+            if ([title isEqual:@"Checking…"] && !self.upgradeItem.enabled && self.toggleItem.enabled) sawChecking = YES;
+            if (sawChecking && !startedUpgrade && [title hasPrefix:@"Upgrade to "] && self.upgradeItem.enabled && menuTitleFits(title)) {
+                startedUpgrade = YES; [self upgrade:nil];
+            }
+            if ([title hasPrefix:@"Upgrading ("] && ![title isEqual:previousTitle] && menuTitleFits(title)) {
                 previousTitle = [title copy]; changes++;
             }
-            BOOL passed = changes >= 3 && !self.upgradeItem.enabled && !self.toggleItem.enabled
+            BOOL passed = sawChecking && startedUpgrade && changes >= 3 && !self.upgradeItem.enabled && !self.toggleItem.enabled
                 && self.item.button.image.isTemplate && self.item.button.title.length == 0
                 && [self.stateLabel.stringValue isEqual:@"Running"];
             if (passed || -[started timeIntervalSinceNow] > 8) {
@@ -160,9 +181,12 @@ static NSImage *statusDot(NSColor *color) {
         }];
         [[NSRunLoop mainRunLoop] addTimer:monitor forMode:NSDefaultRunLoopMode];
         [[NSRunLoop mainRunLoop] addTimer:monitor forMode:NSEventTrackingRunLoopMode];
-        [self upgrade:nil];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ [self.item.button performClick:nil]; });
     }
+}
+- (void)menuWillOpen:(NSMenu *)menu {
+    if (!self.busy) { self.upgradeItem.title = @"Checking…"; self.upgradeItem.enabled = NO; }
+    @synchronized ([SbmMenu class]) { [actions addObject:@4]; }
 }
 - (void)sendAction:(int32_t)action {
     if (self.busy) return;
@@ -191,8 +215,16 @@ static NSImage *statusDot(NSColor *color) {
         self.busy = [message[@"busy"] boolValue]; self.loaded = [message[@"loaded"] boolValue];
         self.toggleItem.title = self.loaded ? @"Pause" : @"Start";
         self.toggleItem.enabled = !self.busy && [message[@"canStart"] boolValue];
+        BOOL upgradeTitleChanged = ![self.upgradeItem.title isEqual:message[@"upgradeLabel"]];
         self.upgradeItem.title = message[@"upgradeLabel"];
         self.upgradeItem.enabled = !self.busy && [message[@"canUpgrade"] boolValue];
+        if (upgradeTitleChanged) {
+            // AppKit keeps the original text-field width during menu tracking.
+            // Reinsert the changed row so longer results/progress get laid out again.
+            NSInteger index = [self.item.menu indexOfItem:self.upgradeItem];
+            [self.item.menu removeItem:self.upgradeItem];
+            [self.item.menu insertItem:self.upgradeItem atIndex:index];
+        }
         self.quitItem.enabled = !self.busy;
     } else if ([kind isEqual:@"alert"]) {
         [NSApp activateIgnoringOtherApps:YES];

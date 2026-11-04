@@ -22,10 +22,16 @@ export function newerVersion(candidate: string, installed: string): boolean {
 }
 
 export class AppController {
-  readonly model: AppModel = { status: 'unknown', version: 'Checking…', busy: false, loaded: false, canStart: false, canUpgrade: true, upgradeLabel: 'Upgrade' };
+  readonly model: AppModel = { status: 'unknown', version: 'Checking…', busy: false, loaded: false, canStart: false, canUpgrade: false, upgradeLabel: 'Checking…' };
   readonly abort = new AbortController();
   private stamp = -1;
   private refreshing = false;
+  private canManage = false;
+  private checkSequence = 0;
+  private checking = false;
+  private checkFailed = false;
+  private release?: Release;
+  private releaseVersion?: string;
   constructor(
     readonly service: Service,
     readonly owner: Owner,
@@ -38,7 +44,19 @@ export class AppController {
     readonly arch = process.arch,
   ) {}
 
-  private publish() { this.render(this.model); }
+  private publish() {
+    if (!this.model.busy) {
+      let available = false, failed = this.checkFailed;
+      try {
+        available = this.releaseVersion !== undefined && (this.model.version === 'Not installed'
+          || this.model.version !== 'Checking…' && newerVersion(this.releaseVersion, this.model.version));
+      } catch { failed = true; }
+      this.model.canUpgrade = this.canManage && !this.checking && !failed && available;
+      this.model.upgradeLabel = this.checking ? 'Checking…' : failed ? 'Update check failed'
+        : this.releaseVersion === undefined ? 'Checking…' : available ? `Upgrade to ${this.releaseVersion}` : 'No new version';
+    }
+    this.render(this.model);
+  }
   private stage(label: string) { this.model.upgradeLabel = label; this.publish(); }
   async refresh(): Promise<void> {
     if (this.refreshing) return;
@@ -54,11 +72,38 @@ export class AppController {
       } else { this.model.version = 'Not installed'; this.stamp = -1; }
       this.model.canStart = state.loaded || installed && await exists(this.service.paths.config);
       const uid = process.getuid?.() ?? 0;
-      this.model.canUpgrade = uid === 0 || uid === this.owner.uid;
-      this.model.canStart = this.model.canStart && this.model.canUpgrade;
+      this.canManage = uid === 0 || uid === this.owner.uid;
+      this.model.canStart = this.model.canStart && this.canManage;
     } catch {
-      this.model.status = 'unknown'; this.model.canStart = false; this.model.canUpgrade = false;
+      this.model.status = 'unknown'; this.model.canStart = false; this.canManage = false;
     } finally { this.refreshing = false; this.publish(); }
+  }
+
+  async checkForUpdates(): Promise<void> {
+    const sequence = ++this.checkSequence;
+    this.checking = true; this.checkFailed = false; this.publish();
+    try {
+      const release = await this.latestRelease();
+      const selected = selectAsset(release, this.arch);
+      // Read the core again so CLI upgrades are reflected on the next opening.
+      const version = await exists(this.service.paths.core) ? await this.service.version() : 'Not installed';
+      if (version !== 'Not installed') newerVersion(selected.version, version);
+      if (sequence !== this.checkSequence) return;
+      this.model.version = version;
+      this.release = release; this.releaseVersion = selected.version;
+    } catch {
+      if (sequence === this.checkSequence) this.checkFailed = true;
+    } finally {
+      if (sequence === this.checkSequence) { this.checking = false; this.publish(); }
+    }
+  }
+
+  private async latestRelease(): Promise<Release> {
+    const response = await this.fetcher(releaseEndpoint());
+    if (!response.ok) throw new Error(`Update check failed: HTTP ${response.status}.`);
+    const release = await response.json() as Release;
+    if (release.prerelease) throw new Error('The latest release is not a stable release.');
+    return release;
   }
 
   async changeState(action: 'start' | 'pause'): Promise<void> {
@@ -79,11 +124,9 @@ export class AppController {
     this.model.busy = true; this.stage('Checking for updates…');
     try {
       requireOwner(this.owner);
-      const response = await this.fetcher(releaseEndpoint());
-      if (!response.ok) throw new Error(`Update check failed: HTTP ${response.status}.`);
-      const release = await response.json() as Release;
-      if (release.prerelease) throw new Error('The latest release is not a stable release.');
+      const release = this.release || await this.latestRelease();
       const selected = selectAsset(release, this.arch);
+      this.release = release; this.releaseVersion = selected.version;
       if (await exists(this.service.paths.core) && !newerVersion(selected.version, await this.service.version())) {
         this.alert('sing-box is already up to date.', false); return;
       }
@@ -106,6 +149,6 @@ export class AppController {
         },
       });
     } catch (error) { if (!(error instanceof AuthorizationCancelled) && !this.abort.signal.aborted) this.alert(errorMessage(error), true); }
-    finally { this.model.busy = false; this.model.upgradeLabel = 'Upgrade'; this.stamp = -1; await this.refresh(); }
+    finally { this.model.busy = false; this.stamp = -1; await this.refresh(); }
   }
 }

@@ -14,11 +14,12 @@ function render(model: AppModel) {
 async function engine(demo: boolean, check = false) {
   if (demo) {
     let running = true, busy = false;
-    const show = (label = 'Upgrade') => render({ status: running ? 'running' : 'paused', version: 'Preview', busy, loaded: running, canStart: true, canUpgrade: true, upgradeLabel: label });
+    const show = (label = 'Upgrade to 1.15.0') => render({ status: running ? 'running' : 'paused', version: 'Preview', busy, loaded: running, canStart: true, canUpgrade: label.startsWith('Upgrade to '), upgradeLabel: label });
     show();
     while (!nativeClosing()) {
       const action = nativeAction();
       if (action === 1 || action === 2) { running = action === 1; show(); }
+      if (action === 4) { show('Checking…'); await sleep(750); show(); }
       if (action === 3) {
         busy = true;
         for (let percent = 0; percent <= 100 && !nativeClosing(); percent += 5) { show(`Upgrading (${percent}%)`); await sleep(250); }
@@ -53,6 +54,7 @@ async function engine(demo: boolean, check = false) {
     const action = nativeAction();
     if (action === 1 || action === 2) void controller.changeState(action === 1 ? 'start' : 'pause');
     if (action === 3) void controller.upgrade();
+    if (action === 4) void controller.checkForUpdates();
     if (Date.now() - lastRefresh >= 5000) { lastRefresh = Date.now(); void controller.refresh(); }
     await sleep(50);
   }

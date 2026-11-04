@@ -7,6 +7,7 @@ import { AppController, AuthorizationCancelled, newerVersion, type AppAction, ty
 import { Service } from '../src/service';
 import { Paths, run, withLock, type Runner } from '../src/system';
 import type { Downloader } from '../src/download';
+import type { Fetcher } from '../src/install';
 
 const folders: string[] = [];
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }); });
@@ -42,6 +43,8 @@ async function fixture(running = false, latest = '1.1.0') {
     options?.onProgress?.({ receivedBytes: bytes.length, totalBytes: bytes.length });
   };
   const owner = { uid: process.getuid!(), gid: process.getgid!() };
+  let checks = 0;
+  let fetcher: Fetcher = async () => Response.json(release);
   const controller = new AppController(new Service(paths, runner, { attempts: 4, interval: 1, stableSamples: 1 }), owner,
     async action => {
       authorized.push(action);
@@ -52,9 +55,84 @@ async function fixture(running = false, latest = '1.1.0') {
         expect(calls.some(args => args[1] === 'check' && args[0].includes('/extracted/'))).toBe(true);
       }
       throw new AuthorizationCancelled();
-    }, model => states.push({ ...model }), message => alerts.push(message), async () => Response.json(release), downloader, join(root, 'cache'), 'arm64');
-  return { root, paths, controller, states, alerts, authorized, get downloads() { return downloads; }, set active(value: boolean) { active = value; }, set rejectCandidate(value: boolean) { rejectCandidate = value; } };
+    }, model => states.push({ ...model }), message => alerts.push(message), async url => { checks++; return fetcher(url); }, downloader, join(root, 'cache'), 'arm64');
+  return { root, paths, controller, states, alerts, authorized, release, get checks() { return checks; }, set fetcher(value: Fetcher) { fetcher = value; }, get downloads() { return downloads; }, set active(value: boolean) { active = value; }, set rejectCandidate(value: boolean) { rejectCandidate = value; } };
 }
+test('each menu opening checks again, disables only the update item, and upgrades the displayed release', async () => {
+  const f = await fixture(); await f.controller.refresh();
+  let respond!: (response: Response) => void;
+  f.fetcher = () => new Promise(resolve => { respond = resolve; });
+  const checking = f.controller.checkForUpdates();
+  expect(f.controller.model.upgradeLabel).toBe('Checking…');
+  expect(f.controller.model.canUpgrade).toBe(false);
+  expect(f.controller.model.busy).toBe(false);
+  expect(f.controller.model.canStart).toBe(true);
+  await f.controller.refresh();
+  expect(f.controller.model.canUpgrade).toBe(false);
+  respond(Response.json(f.release)); await checking;
+  expect(f.controller.model.upgradeLabel).toBe('Upgrade to 1.1.0');
+  expect(f.controller.model.canUpgrade).toBe(true);
+  f.fetcher = async () => Response.json(f.release);
+  await f.controller.checkForUpdates();
+  expect(f.checks).toBe(2);
+  await f.controller.upgrade();
+  expect(f.checks).toBe(2);
+  expect(f.controller.model.upgradeLabel).toBe('No new version');
+  expect(f.controller.model.canUpgrade).toBe(false);
+});
+test('equal/newer installed versions stay disabled across status refresh; missing cores can be installed', async () => {
+  const f = await fixture(false, '1.0.0'); await f.controller.refresh();
+  await f.controller.checkForUpdates(); await f.controller.refresh();
+  expect(f.controller.model.upgradeLabel).toBe('No new version');
+  expect(f.controller.model.canUpgrade).toBe(false);
+  await writeFile(f.paths.core, '2.0.0'); await f.controller.checkForUpdates();
+  expect(f.controller.model.upgradeLabel).toBe('No new version');
+  expect(f.controller.model.canUpgrade).toBe(false);
+  await rm(f.paths.core); await f.controller.checkForUpdates();
+  expect(f.controller.model.upgradeLabel).toBe('Upgrade to 1.0.0');
+  expect(f.controller.model.canUpgrade).toBe(true);
+  expect(f.downloads).toBe(0); expect(f.authorized).toEqual([]);
+});
+test('failed or invalid release checks stay disabled and retry on the next opening without alerts', async () => {
+  const f = await fixture(); await f.controller.refresh();
+  await f.controller.checkForUpdates();
+  for (const response of [new Response('', { status: 503 }), Response.json({ ...f.release, prerelease: true }), Response.json({ ...f.release, assets: [] }), new Response('invalid JSON')]) {
+    f.fetcher = async () => response;
+    await f.controller.checkForUpdates(); await f.controller.refresh();
+    expect(f.controller.model.upgradeLabel).toBe('Update check failed');
+    expect(f.controller.model.canUpgrade).toBe(false);
+  }
+  f.fetcher = async () => Response.json(f.release);
+  await f.controller.checkForUpdates();
+  expect(f.controller.model.upgradeLabel).toBe('Upgrade to 1.1.0');
+  expect(f.controller.model.canUpgrade).toBe(true);
+  expect(f.alerts).toEqual([]); expect(f.downloads).toBe(0);
+});
+test('an earlier menu request cannot overwrite the newest response', async () => {
+  const f = await fixture(); await f.controller.refresh();
+  const responses: ((response: Response) => void)[] = [];
+  f.fetcher = () => new Promise(resolve => { responses.push(resolve); });
+  const earlier = f.controller.checkForUpdates(), latest = f.controller.checkForUpdates();
+  responses[1](Response.json(f.release)); await latest;
+  responses[0](new Response('', { status: 503 })); await earlier;
+  expect(f.controller.model.upgradeLabel).toBe('Upgrade to 1.1.0');
+  expect(f.controller.model.canUpgrade).toBe(true);
+});
+test('an unrecognized installed version disables updates without breaking periodic refresh', async () => {
+  const f = await fixture(); await f.controller.refresh(); await f.controller.checkForUpdates();
+  await writeFile(f.paths.core, 'development');
+  await f.controller.refresh();
+  expect(f.controller.model.upgradeLabel).toBe('Update check failed');
+  expect(f.controller.model.canUpgrade).toBe(false);
+});
+test('opening the menu during an operation checks without replacing its progress label', async () => {
+  const f = await fixture(); await f.controller.refresh();
+  f.controller.model.busy = true; f.controller.model.upgradeLabel = 'Upgrading (42%)';
+  await f.controller.checkForUpdates();
+  expect(f.checks).toBe(1);
+  expect(f.controller.model.upgradeLabel).toBe('Upgrading (42%)');
+  expect(f.controller.model.busy).toBe(true);
+});
 test('the installed version, service state, and stale Start/Pause actions need no authorization', async () => {
   const f = await fixture(true); await f.controller.refresh();
   expect(f.controller.model.status).toBe('running'); expect(f.controller.model.version).toBe('1.0.0');
