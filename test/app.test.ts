@@ -58,12 +58,12 @@ async function fixture(running = false, latest = '1.1.0') {
     }, model => states.push({ ...model }), message => alerts.push(message), async url => { checks++; return fetcher(url); }, downloader, join(root, 'cache'), 'arm64');
   return { root, paths, controller, states, alerts, authorized, release, get checks() { return checks; }, set fetcher(value: Fetcher) { fetcher = value; }, get downloads() { return downloads; }, set active(value: boolean) { active = value; }, set rejectCandidate(value: boolean) { rejectCandidate = value; } };
 }
-test('each menu opening checks again, disables only the update item, and upgrades the displayed release', async () => {
+test('each menu opening checks in the background and shows only the available upgrade', async () => {
   const f = await fixture(); await f.controller.refresh();
   let respond!: (response: Response) => void;
   f.fetcher = () => new Promise(resolve => { respond = resolve; });
   const checking = f.controller.checkForUpdates();
-  expect(f.controller.model.upgradeLabel).toBe('Checking…');
+  expect(f.controller.model.upgradeLabel).toBe('');
   expect(f.controller.model.canUpgrade).toBe(false);
   expect(f.controller.model.busy).toBe(false);
   expect(f.controller.model.canStart).toBe(true);
@@ -77,29 +77,29 @@ test('each menu opening checks again, disables only the update item, and upgrade
   expect(f.checks).toBe(2);
   await f.controller.upgrade();
   expect(f.checks).toBe(2);
-  expect(f.controller.model.upgradeLabel).toBe('No new version');
+  expect(f.controller.model.upgradeLabel).toBe('');
   expect(f.controller.model.canUpgrade).toBe(false);
 });
-test('equal/newer installed versions stay disabled across status refresh; missing cores can be installed', async () => {
+test('equal/newer installed versions keep the update item hidden across status refresh; missing cores can be installed', async () => {
   const f = await fixture(false, '1.0.0'); await f.controller.refresh();
   await f.controller.checkForUpdates(); await f.controller.refresh();
-  expect(f.controller.model.upgradeLabel).toBe('No new version');
+  expect(f.controller.model.upgradeLabel).toBe('');
   expect(f.controller.model.canUpgrade).toBe(false);
   await writeFile(f.paths.core, '2.0.0'); await f.controller.checkForUpdates();
-  expect(f.controller.model.upgradeLabel).toBe('No new version');
+  expect(f.controller.model.upgradeLabel).toBe('');
   expect(f.controller.model.canUpgrade).toBe(false);
   await rm(f.paths.core); await f.controller.checkForUpdates();
   expect(f.controller.model.upgradeLabel).toBe('Upgrade to 1.0.0');
   expect(f.controller.model.canUpgrade).toBe(true);
   expect(f.downloads).toBe(0); expect(f.authorized).toEqual([]);
 });
-test('failed or invalid release checks stay disabled and retry on the next opening without alerts', async () => {
+test('failed or invalid release checks keep the update item hidden and retry on the next opening without alerts', async () => {
   const f = await fixture(); await f.controller.refresh();
   await f.controller.checkForUpdates();
   for (const response of [new Response('', { status: 503 }), Response.json({ ...f.release, prerelease: true }), Response.json({ ...f.release, assets: [] }), new Response('invalid JSON')]) {
     f.fetcher = async () => response;
     await f.controller.checkForUpdates(); await f.controller.refresh();
-    expect(f.controller.model.upgradeLabel).toBe('Update check failed');
+    expect(f.controller.model.upgradeLabel).toBe('');
     expect(f.controller.model.canUpgrade).toBe(false);
   }
   f.fetcher = async () => Response.json(f.release);
@@ -118,11 +118,11 @@ test('an earlier menu request cannot overwrite the newest response', async () =>
   expect(f.controller.model.upgradeLabel).toBe('Upgrade to 1.1.0');
   expect(f.controller.model.canUpgrade).toBe(true);
 });
-test('an unrecognized installed version disables updates without breaking periodic refresh', async () => {
+test('an unrecognized installed version hides updates without breaking periodic refresh', async () => {
   const f = await fixture(); await f.controller.refresh(); await f.controller.checkForUpdates();
   await writeFile(f.paths.core, 'development');
   await f.controller.refresh();
-  expect(f.controller.model.upgradeLabel).toBe('Update check failed');
+  expect(f.controller.model.upgradeLabel).toBe('');
   expect(f.controller.model.canUpgrade).toBe(false);
 });
 test('opening the menu during an operation checks without replacing its progress label', async () => {

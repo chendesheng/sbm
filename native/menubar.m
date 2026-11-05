@@ -148,8 +148,8 @@ static BOOL menuTitleFits(NSString *title) {
     [items addItem:[NSMenuItem separatorItem]];
     self.toggleItem = [items addItemWithTitle:@"Start" action:@selector(toggle:) keyEquivalent:@""];
     self.toggleItem.target = self; self.toggleItem.enabled = NO;
-    self.upgradeItem = [items addItemWithTitle:@"Checking…" action:@selector(upgrade:) keyEquivalent:@""];
-    self.upgradeItem.target = self; self.upgradeItem.enabled = NO;
+    self.upgradeItem = [items addItemWithTitle:@"" action:@selector(upgrade:) keyEquivalent:@""];
+    self.upgradeItem.target = self; self.upgradeItem.enabled = NO; self.upgradeItem.hidden = YES;
     NSMenuItem *vpsSeparator = [NSMenuItem separatorItem];
     NSMenuItem *vpsHeader = [NSMenuItem sectionHeaderWithTitle:@"VPS"];
     [items addItem:vpsSeparator];
@@ -217,11 +217,11 @@ static BOOL menuTitleFits(NSString *title) {
             } else if (vpsStep == 5 && [self.stateLabel.stringValue isEqual:@"Running"]
                 && [self.vpsItems filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"hidden == YES"]].count == 0) vpsStep = 6;
             NSString *title = self.upgradeItem.title;
-            if ([title isEqual:@"Checking…"] && !self.upgradeItem.enabled && self.toggleItem.enabled) sawChecking = YES;
-            if (vpsStep == 6 && sawChecking && !startedUpgrade && [title hasPrefix:@"Upgrade to "] && self.upgradeItem.enabled && menuTitleFits(title)) {
+            if (self.upgradeItem.hidden && !self.upgradeItem.enabled && self.toggleItem.enabled) sawChecking = YES;
+            if (vpsStep == 6 && sawChecking && !startedUpgrade && !self.upgradeItem.hidden && [title hasPrefix:@"Upgrade to "] && self.upgradeItem.enabled && menuTitleFits(title)) {
                 startedUpgrade = YES; [self upgrade:nil];
             }
-            if ([title hasPrefix:@"Upgrading ("] && ![title isEqual:previousTitle] && menuTitleFits(title)) {
+            if (!self.upgradeItem.hidden && [title hasPrefix:@"Upgrading ("] && ![title isEqual:previousTitle] && menuTitleFits(title)) {
                 previousTitle = [title copy]; changes++;
             }
             BOOL passed = vpsStep == 6 && sawChecking && startedUpgrade && changes >= 3 && !self.upgradeItem.enabled && !self.toggleItem.enabled
@@ -241,7 +241,7 @@ static BOOL menuTitleFits(NSString *title) {
     }
 }
 - (void)menuWillOpen:(NSMenu *)menu {
-    if (!self.busy) { self.upgradeItem.title = @"Checking…"; self.upgradeItem.enabled = NO; }
+    if (!self.busy) { self.upgradeItem.hidden = YES; self.upgradeItem.enabled = NO; }
     @synchronized ([SbmMenu class]) { [actions addObject:@4]; }
 }
 - (void)sendAction:(int32_t)action {
@@ -292,6 +292,7 @@ static BOOL menuTitleFits(NSString *title) {
         self.toggleItem.enabled = !self.busy && [message[@"canStart"] boolValue];
         BOOL upgradeTitleChanged = ![self.upgradeItem.title isEqual:message[@"upgradeLabel"]];
         self.upgradeItem.title = message[@"upgradeLabel"];
+        self.upgradeItem.hidden = self.upgradeItem.title.length == 0;
         self.upgradeItem.enabled = !self.busy && [message[@"canUpgrade"] boolValue];
         if (upgradeTitleChanged) {
             // AppKit keeps the original text-field width during menu tracking.

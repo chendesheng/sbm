@@ -30,7 +30,7 @@ async function engine(demo: boolean, check = false) {
       }
       if (action === 13 || action === 14) { ++vps.wpsRevision; vps.wpsEnabled = action === 13; vps.wpsLabel = vps.wpsEnabled ? 'On' : 'Off'; renderVps(vps); }
       if (action === 1 || action === 2) { running = action === 1; show(); }
-      if (action === 4) { show('Checking…'); await sleep(750); show(); }
+      if (action === 4) { show(''); await sleep(750); show(); }
       if (action === 3) {
         busy = true;
         for (let percent = 0; percent <= 100 && !nativeClosing(); percent += 5) { show(`Upgrading (${percent}%)`); await sleep(250); }

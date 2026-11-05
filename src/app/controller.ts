@@ -22,7 +22,7 @@ export function newerVersion(candidate: string, installed: string): boolean {
 }
 
 export class AppController {
-  readonly model: AppModel = { status: 'unknown', version: 'Checking…', busy: false, loaded: false, canStart: false, canUpgrade: false, upgradeLabel: 'Checking…' };
+  readonly model: AppModel = { status: 'unknown', version: 'Checking…', busy: false, loaded: false, canStart: false, canUpgrade: false, upgradeLabel: '' };
   readonly abort = new AbortController();
   private stamp = -1;
   private refreshing = false;
@@ -52,8 +52,7 @@ export class AppController {
           || this.model.version !== 'Checking…' && newerVersion(this.releaseVersion, this.model.version));
       } catch { failed = true; }
       this.model.canUpgrade = this.canManage && !this.checking && !failed && available;
-      this.model.upgradeLabel = this.checking ? 'Checking…' : failed ? 'Update check failed'
-        : this.releaseVersion === undefined ? 'Checking…' : available ? `Upgrade to ${this.releaseVersion}` : 'No new version';
+      this.model.upgradeLabel = !this.checking && !failed && available ? `Upgrade to ${this.releaseVersion}` : '';
     }
     this.render(this.model);
   }
