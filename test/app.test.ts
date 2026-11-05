@@ -173,3 +173,68 @@ test('version checks never downgrade a newer installed core', () => {
   expect(newerVersion('1.14.4', '1.14.4-beta.1')).toBe(true);
   expect(newerVersion('1.15.0', '1.14.4')).toBe(true);
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+test('service switch responds immediately and serializes rapid changes while the service is slow', async () => {
+  const f = await fixture(true); await f.controller.refresh();
+  const entered = deferred<void>(), finish = deferred<void>();
+  const calls: string[] = [];
+  f.controller.service.routingPauseReady = async () => true;
+  // Keep the service loaded while routing is paused, as in the real fast path.
+  let paused = false;
+  f.controller.service.state = async () => ({ loaded: true, pid: 101, state: 'running' });
+  f.controller.service.routingPaused = async () => paused;
+  f.controller.service.pause = async () => { calls.push('pause'); entered.resolve(); await finish.promise; paused = true; };
+  f.controller.service.start = async () => { calls.push('start'); paused = false; return ''; };
+  const changing = f.controller.changeState('pause');
+  expect(f.controller.model.switchOn).toBe(false);
+  expect(f.controller.model.busy).toBe(false);
+  expect(f.controller.model.canStart).toBe(true);
+  await entered.promise;
+  await f.controller.changeState('start');
+  await f.controller.changeState('pause');
+  await f.controller.changeState('start');
+  await f.controller.refresh(); await f.controller.upgrade();
+  expect(f.controller.model.switchOn).toBe(true);
+  expect(calls).toEqual(['pause']); expect(f.downloads).toBe(0);
+  finish.resolve(); await changing;
+  expect(calls).toEqual(['pause', 'start']);
+  expect(f.controller.model.status).toBe('running');
+  expect(f.controller.model.switchOn).toBe(true);
+  expect(f.controller.model.switchRevision).toBe(4);
+});
+
+test('a status read started before a click cannot move the switch back', async () => {
+  const f = await fixture(true); await f.controller.refresh();
+  const stale = deferred<{ loaded: boolean; pid: number; state: string }>();
+  const entered = deferred<void>(), finish = deferred<void>();
+  let reads = 0, paused = false;
+  f.controller.service.state = () => ++reads === 1 ? stale.promise : Promise.resolve({ loaded: true, pid: 101, state: 'running' });
+  f.controller.service.routingPaused = async () => paused;
+  f.controller.service.routingPauseReady = async () => true;
+  f.controller.service.pause = async () => { entered.resolve(); await finish.promise; paused = true; };
+  const reading = f.controller.refresh();
+  const changing = f.controller.changeState('pause'); await entered.promise;
+  stale.resolve({ loaded: true, pid: 101, state: 'running' }); await reading;
+  expect(f.controller.model.switchOn).toBe(false);
+  finish.resolve(); await changing;
+  expect(f.controller.model.switchOn).toBe(false);
+  expect(f.controller.model.status).toBe('paused');
+});
+
+test('a failed switch restores observed service state and remains usable', async () => {
+  const f = await fixture(true); await f.controller.refresh();
+  f.controller.service.routingPauseReady = async () => true;
+  f.controller.service.pause = async () => { throw new Error('Pause failed'); };
+  await f.controller.changeState('pause');
+  expect(f.controller.model.switchOn).toBe(true);
+  expect(f.controller.model.canStart).toBe(true);
+  expect(f.controller.model.busy).toBe(false);
+  expect(f.alerts).toEqual(['Pause failed']);
+});

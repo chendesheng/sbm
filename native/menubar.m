@@ -7,7 +7,8 @@
 @property NSTextField *stateLabel;
 @property NSImageView *stateDot;
 @property NSTextField *titleLabel;
-@property NSMenuItem *toggleItem;
+@property NSSwitch *serviceSwitch;
+@property NSInteger switchRevision;
 @property NSMenuItem *upgradeItem;
 @property NSMenuItem *quitItem;
 @property NSArray<NSMenuItem *> *vpsItems;
@@ -126,28 +127,33 @@ static BOOL menuTitleFits(NSString *title) {
     items.showsStateColumn = NO;
     items.delegate = self;
     self.stateItem = [items addItemWithTitle:@"Checking…" action:nil keyEquivalent:@""];
-    NSView *header = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 260, 72)];
+    NSView *header = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 280, 72)];
+    header.autoresizingMask = NSViewWidthSizable;
     NSImageView *appIcon = [[NSImageView alloc] initWithFrame:NSMakeRect(14, 12, 48, 48)];
     appIcon.image = [[NSImage alloc] initWithContentsOfFile:[[NSBundle mainBundle] pathForResource:@"AppIcon" ofType:@"icns"]];
     [header addSubview:appIcon];
     self.titleLabel = [NSTextField labelWithString:@"sbm"];
-    self.titleLabel.frame = NSMakeRect(76, 37, 170, 23);
+    self.titleLabel.frame = NSMakeRect(76, 37, 140, 23);
     self.titleLabel.font = [NSFont boldSystemFontOfSize:17];
     self.titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [header addSubview:self.titleLabel];
     self.stateDot = [[NSImageView alloc] initWithFrame:NSMakeRect(77, 21, 8, 8)];
     self.stateDot.image = statusDot(NSColor.systemYellowColor); [header addSubview:self.stateDot];
     self.stateLabel = [NSTextField labelWithString:@"Checking…"];
-    self.stateLabel.frame = NSMakeRect(90, 15, 156, 20);
+    self.stateLabel.frame = NSMakeRect(90, 15, 126, 20);
     self.stateLabel.font = [NSFont systemFontOfSize:13]; self.stateLabel.textColor = NSColor.secondaryLabelColor;
     // Align the light with the visible capitals, rather than the text field's padding.
     CGFloat textCenter = NSMaxY(self.stateLabel.frame) - self.stateLabel.firstBaselineOffsetFromTop + self.stateLabel.font.capHeight / 2;
     [self.stateDot setFrameOrigin:NSMakePoint(77, textCenter - 4)];
     [header addSubview:self.stateLabel]; self.stateItem.view = header;
-    self.stateItem.enabled = NO;
+    self.serviceSwitch = [[NSSwitch alloc] initWithFrame:NSMakeRect(224, 24, 38, 24)];
+    self.serviceSwitch.autoresizingMask = NSViewMinXMargin;
+    self.serviceSwitch.controlSize = NSControlSizeSmall; self.serviceSwitch.enabled = NO;
+    self.serviceSwitch.target = self; self.serviceSwitch.action = @selector(toggle:);
+    self.serviceSwitch.accessibilityLabel = @"sing-box";
+    [header addSubview:self.serviceSwitch];
+    self.stateItem.enabled = YES;
     [items addItem:[NSMenuItem separatorItem]];
-    self.toggleItem = [items addItemWithTitle:@"Start" action:@selector(toggle:) keyEquivalent:@""];
-    self.toggleItem.target = self; self.toggleItem.enabled = NO;
     self.upgradeItem = [items addItemWithTitle:@"" action:@selector(upgrade:) keyEquivalent:@""];
     self.upgradeItem.target = self; self.upgradeItem.enabled = NO; self.upgradeItem.hidden = YES;
     NSMenuItem *vpsSeparator = [NSMenuItem separatorItem];
@@ -210,21 +216,33 @@ static BOOL menuTitleFits(NSString *title) {
             } else if (vpsStep == 2 && self.exitChoices[2].state == NSControlStateValueOn && self.wpsSwitch.state == NSControlStateValueOff) {
                 [self selectExit:self.exitChoices[0]]; vpsStep = 3;
             } else if (vpsStep == 3 && self.exitChoices[0].state == NSControlStateValueOn) {
-                [self toggle:nil]; vpsStep = 4;
+                [self.serviceSwitch performClick:nil]; vpsStep = 4;
+                if (self.serviceSwitch.state != NSControlStateValueOff || !self.serviceSwitch.enabled || !self.quitItem.enabled) vpsStep = -1;
+                NSDictionary *stale;
+                @synchronized ([SbmMenu class]) { stale = lastModel; }
+                if (stale) [self receive:stale];
+                if (self.serviceSwitch.state != NSControlStateValueOff) vpsStep = -1;
             } else if (vpsStep == 4 && [self.stateLabel.stringValue isEqual:@"Paused"]
                 && [self.vpsItems filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"hidden == NO"]].count == 0) {
-                [self toggle:nil]; vpsStep = 5;
+                [self.serviceSwitch performClick:nil];
+                [self.serviceSwitch performClick:nil];
+                [self.serviceSwitch performClick:nil]; vpsStep = 5;
+                if (self.serviceSwitch.state != NSControlStateValueOn || !self.serviceSwitch.enabled) vpsStep = -1;
             } else if (vpsStep == 5 && [self.stateLabel.stringValue isEqual:@"Running"]
                 && [self.vpsItems filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"hidden == YES"]].count == 0) vpsStep = 6;
             NSString *title = self.upgradeItem.title;
-            if (self.upgradeItem.hidden && !self.upgradeItem.enabled && self.toggleItem.enabled) sawChecking = YES;
+            if (self.upgradeItem.hidden && !self.upgradeItem.enabled && self.serviceSwitch.enabled) sawChecking = YES;
             if (vpsStep == 6 && sawChecking && !startedUpgrade && !self.upgradeItem.hidden && [title hasPrefix:@"Upgrade to "] && self.upgradeItem.enabled && menuTitleFits(title)) {
                 startedUpgrade = YES; [self upgrade:nil];
             }
             if (!self.upgradeItem.hidden && [title hasPrefix:@"Upgrading ("] && ![title isEqual:previousTitle] && menuTitleFits(title)) {
                 previousTitle = [title copy]; changes++;
             }
-            BOOL passed = vpsStep == 6 && sawChecking && startedUpgrade && changes >= 3 && !self.upgradeItem.enabled && !self.toggleItem.enabled
+            BOOL passed = vpsStep == 6 && sawChecking && startedUpgrade && changes >= 3 && !self.upgradeItem.enabled && !self.serviceSwitch.enabled
+                && self.item.menu.itemArray.firstObject == self.stateItem
+                && self.serviceSwitch.superview == self.stateItem.view
+                && fabs(NSWidth(self.stateItem.view.bounds) - NSMaxX(self.serviceSwitch.frame) - 18) < 1
+                && NSMaxX(self.titleLabel.frame) <= NSMinX(self.serviceSwitch.frame)
                 && self.item.button.image.isTemplate && self.item.button.title.length == 0
                 && [self.stateLabel.stringValue isEqual:@"Running"];
             if (passed || -[started timeIntervalSinceNow] > 8) {
@@ -246,10 +264,17 @@ static BOOL menuTitleFits(NSString *title) {
 }
 - (void)sendAction:(int32_t)action {
     if (self.busy) return;
-    self.busy = YES; self.toggleItem.enabled = NO; self.upgradeItem.enabled = NO; self.quitItem.enabled = NO;
+    self.busy = YES; self.serviceSwitch.enabled = NO; self.upgradeItem.enabled = NO; self.quitItem.enabled = NO;
     @synchronized ([SbmMenu class]) { [actions addObject:@(action)]; }
 }
-- (void)toggle:(id)sender { [self sendAction:self.loaded ? 2 : 1]; }
+- (void)toggle:(id)sender {
+    if (!self.serviceSwitch.enabled) return;
+    self.loaded = !self.loaded;
+    ++self.switchRevision;
+    self.serviceSwitch.state = self.loaded ? NSControlStateValueOn : NSControlStateValueOff;
+    self.upgradeItem.enabled = NO;
+    @synchronized ([SbmMenu class]) { [actions addObject:self.loaded ? @1 : @2]; }
+}
 - (void)upgrade:(id)sender { [self sendAction:3]; }
 - (void)selectExit:(NSMenuItem *)sender {
     if (!sender.enabled || sender.state == NSControlStateValueOn) return;
@@ -287,13 +312,17 @@ static BOOL menuTitleFits(NSString *title) {
             attributes:@{ NSFontAttributeName: [NSFont systemFontOfSize:12], NSForegroundColorAttributeName: NSColor.secondaryLabelColor }]];
         self.titleLabel.attributedStringValue = title;
         self.titleLabel.toolTip = [@"sing-box " stringByAppendingString:version];
-        self.busy = [message[@"busy"] boolValue]; self.loaded = [message[@"loaded"] boolValue];
-        self.toggleItem.title = self.loaded ? @"Pause" : @"Start";
-        self.toggleItem.enabled = !self.busy && [message[@"canStart"] boolValue];
+        self.busy = [message[@"busy"] boolValue];
+        BOOL currentSwitch = [message[@"switchRevision"] integerValue] >= self.switchRevision;
+        if (currentSwitch) {
+            self.loaded = [message[@"switchOn"] boolValue];
+            self.serviceSwitch.state = self.loaded ? NSControlStateValueOn : NSControlStateValueOff;
+            self.serviceSwitch.enabled = !self.busy && [message[@"canStart"] boolValue];
+        }
         BOOL upgradeTitleChanged = ![self.upgradeItem.title isEqual:message[@"upgradeLabel"]];
         self.upgradeItem.title = message[@"upgradeLabel"];
         self.upgradeItem.hidden = self.upgradeItem.title.length == 0;
-        self.upgradeItem.enabled = !self.busy && [message[@"canUpgrade"] boolValue];
+        self.upgradeItem.enabled = currentSwitch && !self.busy && [message[@"canUpgrade"] boolValue];
         if (upgradeTitleChanged) {
             // AppKit keeps the original text-field width during menu tracking.
             // Reinsert the changed row so longer results/progress get laid out again.
@@ -364,17 +393,17 @@ int32_t sbm_run(uint8_t check) {
         application.delegate = menu;
         [application run];
         @synchronized ([SbmMenu class]) { closing = YES; }
-        if (interfaceTest && interfaceResult == 0) fprintf(stdout, "PASS: native menu stays responsive and progress updates while open; VPS controls update, hide when paused and return when running.\n");
+        if (interfaceTest && interfaceResult == 0) fprintf(stdout, "PASS: native menu stays responsive and progress updates while open; first-row switch responds immediately to rapid toggles; VPS controls update, hide when paused and return when running.\n");
         return interfaceTest ? interfaceResult : 0;
     }
 }
 
-void sbm_render(int32_t status, const uint8_t *version, size_t versionLength, uint8_t busy, uint8_t loaded,
-                uint8_t canStart, uint8_t canUpgrade, const uint8_t *upgrade, size_t upgradeLength) {
+void sbm_render(int32_t status, const uint8_t *version, size_t versionLength, uint8_t busy, uint8_t switchOn,
+                uint8_t canStart, uint8_t canUpgrade, const uint8_t *upgrade, size_t upgradeLength, int32_t switchRevision) {
     @autoreleasepool {
         initializeBridge();
         NSDictionary *message = @{ @"kind": @"state", @"status": @(status), @"version": text(version, versionLength),
-            @"busy": @(busy), @"loaded": @(loaded), @"canStart": @(canStart), @"canUpgrade": @(canUpgrade), @"upgradeLabel": text(upgrade, upgradeLength) };
+            @"busy": @(busy), @"switchOn": @(switchOn), @"switchRevision": @(switchRevision), @"canStart": @(canStart), @"canUpgrade": @(canUpgrade), @"upgradeLabel": text(upgrade, upgradeLength) };
         @synchronized ([SbmMenu class]) { lastModel = message; }
         onMain(message);
     }

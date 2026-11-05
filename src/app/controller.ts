@@ -8,7 +8,7 @@ import { download, type Downloader } from '../download';
 import { defaultCacheRoot } from '../cache';
 
 export type AppStatus = 'running' | 'paused' | 'waiting' | 'unknown';
-export type AppModel = { status: AppStatus; version: string; busy: boolean; loaded: boolean; canStart: boolean; canUpgrade: boolean; upgradeLabel: string };
+export type AppModel = { status: AppStatus; version: string; busy: boolean; loaded: boolean; canStart: boolean; canUpgrade: boolean; upgradeLabel: string; switchOn: boolean; switchRevision: number };
 export type AppAction = 'start' | 'pause' | 'upgrade';
 export type Authorize = (action: AppAction, preparedDirectory: string) => Promise<number>;
 export class AuthorizationCancelled extends Error {}
@@ -22,10 +22,12 @@ export function newerVersion(candidate: string, installed: string): boolean {
 }
 
 export class AppController {
-  readonly model: AppModel = { status: 'unknown', version: 'Checking…', busy: false, loaded: false, canStart: false, canUpgrade: false, upgradeLabel: '' };
+  readonly model: AppModel = { status: 'unknown', version: 'Checking…', busy: false, loaded: false, canStart: false, canUpgrade: false, upgradeLabel: '', switchOn: false, switchRevision: 0 };
   readonly abort = new AbortController();
   private stamp = -1;
-  private refreshing = false;
+  private refreshSequence = 0;
+  private switching = false;
+  private confirmedSwitchOn = false;
   private canManage = false;
   private checkSequence = 0;
   private checking = false;
@@ -51,31 +53,36 @@ export class AppController {
         available = this.releaseVersion !== undefined && (this.model.version === 'Not installed'
           || this.model.version !== 'Checking…' && newerVersion(this.releaseVersion, this.model.version));
       } catch { failed = true; }
-      this.model.canUpgrade = this.canManage && !this.checking && !failed && available;
+      this.model.canUpgrade = this.canManage && !this.switching && !this.checking && !failed && available;
       this.model.upgradeLabel = !this.checking && !failed && available ? `Upgrade to ${this.releaseVersion}` : '';
     }
     this.render(this.model);
   }
   private stage(label: string) { this.model.upgradeLabel = label; this.publish(); }
-  async refresh(): Promise<void> {
-    if (this.refreshing) return;
-    this.refreshing = true;
+  async refresh(settling = false): Promise<void> {
+    if (this.switching && !settling) return;
+    const sequence = ++this.refreshSequence, revision = this.model.switchRevision;
+    const current = () => sequence === this.refreshSequence && revision === this.model.switchRevision;
     try {
       const state = await this.service.state();
-      this.model.loaded = state.loaded;
-      this.model.status = state.pid ? await this.service.routingPaused() ? 'paused' : 'running' : state.loaded ? 'waiting' : 'paused';
+      const status = state.pid ? await this.service.routingPaused() ? 'paused' : 'running' : state.loaded ? 'waiting' : 'paused';
       const installed = await exists(this.service.paths.core);
-      if (installed) {
-        const stamp = (await stat(this.service.paths.core)).mtimeMs;
-        if (stamp !== this.stamp) { this.model.version = await this.service.version(); this.stamp = stamp; }
-      } else { this.model.version = 'Not installed'; this.stamp = -1; }
-      this.model.canStart = state.loaded || installed && await exists(this.service.paths.config);
+      const stamp = installed ? (await stat(this.service.paths.core)).mtimeMs : -1;
+      const version = installed ? stamp !== this.stamp ? await this.service.version() : this.model.version : 'Not installed';
+      const canStart = state.loaded || installed && await exists(this.service.paths.config);
+      if (!current()) return;
+      this.model.loaded = state.loaded; this.model.status = status;
+      this.model.switchOn = state.loaded && status !== 'paused';
+      this.confirmedSwitchOn = this.model.switchOn;
+      this.model.version = version; this.stamp = stamp;
       const uid = process.getuid?.() ?? 0;
       this.canManage = uid === 0 || uid === this.owner.uid;
-      this.model.canStart = this.model.canStart && this.canManage;
+      this.model.canStart = canStart && this.canManage;
     } catch {
+      if (!current()) return;
       this.model.status = 'unknown'; this.model.canStart = false; this.canManage = false;
-    } finally { this.refreshing = false; this.publish(); }
+      this.model.switchOn = this.confirmedSwitchOn;
+    } finally { this.publish(); }
   }
 
   async checkForUpdates(): Promise<void> {
@@ -106,27 +113,44 @@ export class AppController {
   }
 
   async changeState(action: 'start' | 'pause'): Promise<void> {
-    if (this.model.busy) return;
-    this.model.busy = true; this.publish();
+    ++this.model.switchRevision;
+    // Acknowledge every native click; old renders cannot undo a newer choice.
+    if (this.model.busy) { this.publish(); return; }
+    this.model.switchOn = action === 'start';
+    if (this.switching) { this.publish(); return; }
+    this.switching = true; this.publish();
     try {
-      requireOwner(this.owner);
-      const state = await this.service.state();
-      if (action === 'pause' && !state.loaded) return;
-      if (action === 'start' && state.pid || action === 'pause' && await this.service.routingPauseReady()) {
-        await withDataLock(this.service.paths, this.owner, async () => {
-          if (action === 'start') await this.service.start();
-          else await this.service.pause();
-        });
-        return;
+      for (;;) {
+        const revision = this.model.switchRevision;
+        const desired = this.model.switchOn;
+        try { await this.applyState(desired ? 'start' : 'pause'); }
+        catch (error) {
+          if (revision === this.model.switchRevision && !(error instanceof AuthorizationCancelled)) this.alert(errorMessage(error), true);
+        }
+        if (revision !== this.model.switchRevision) continue;
+        await this.refresh(true);
+        if (revision === this.model.switchRevision) break;
       }
-      if (action === 'start') { await this.service.requireCore(); await this.service.validate(); }
-      await this.authorize(action, '');
-    } catch (error) { if (!(error instanceof AuthorizationCancelled)) this.alert(errorMessage(error), true); }
-    finally { this.model.busy = false; await this.refresh(); }
+    } finally { this.switching = false; this.publish(); }
+  }
+
+  private async applyState(action: 'start' | 'pause'): Promise<void> {
+    requireOwner(this.owner);
+    const state = await this.service.state();
+    if (action === 'pause' && !state.loaded) return;
+    if (action === 'start' && state.pid || action === 'pause' && await this.service.routingPauseReady()) {
+      await withDataLock(this.service.paths, this.owner, async () => {
+        if (action === 'start') await this.service.start();
+        else await this.service.pause();
+      });
+      return;
+    }
+    if (action === 'start') { await this.service.requireCore(); await this.service.validate(); }
+    await this.authorize(action, '');
   }
 
   async upgrade(): Promise<void> {
-    if (this.model.busy) return;
+    if (this.model.busy || this.switching) return;
     this.model.busy = true; this.stage('Checking for updates…');
     try {
       requireOwner(this.owner);

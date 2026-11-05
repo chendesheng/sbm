@@ -9,7 +9,7 @@ import { VpsClient, VpsController, exitModes, exitNames, type VpsModel } from '.
 
 function render(model: AppModel) {
   const status = model.status === 'running' ? 1 : model.status === 'paused' ? 2 : 0;
-  nativeRender(status, model.version, model.busy, model.loaded && model.status !== 'paused', model.canStart, model.canUpgrade, model.upgradeLabel);
+  nativeRender(status, model.version, model.busy, model.switchOn, model.canStart, model.canUpgrade, model.upgradeLabel, model.switchRevision);
 }
 
 function renderVps(model: VpsModel) {
@@ -18,10 +18,10 @@ function renderVps(model: VpsModel) {
 
 async function engine(demo: boolean, check = false) {
   if (demo) {
-    let running = true, busy = false;
+    let running = true, busy = false, switchRevision = 0;
     const vps: VpsModel = { mode: 'off', exitLabel: 'DMIT direct', exitAvailable: true, wpsEnabled: false, wpsLabel: 'Off', wpsAvailable: true, wpsRevision: 0 };
     renderVps(vps);
-    const show = (label = 'Upgrade to 1.15.0') => render({ status: running ? 'running' : 'paused', version: 'Preview', busy, loaded: running, canStart: true, canUpgrade: label.startsWith('Upgrade to '), upgradeLabel: label });
+    const show = (label = 'Upgrade to 1.15.0') => render({ status: running ? 'running' : 'paused', version: 'Preview', busy, loaded: running, canStart: true, canUpgrade: label.startsWith('Upgrade to '), upgradeLabel: label, switchOn: running, switchRevision });
     show();
     while (!nativeClosing()) {
       const action = nativeAction();
@@ -29,7 +29,7 @@ async function engine(demo: boolean, check = false) {
         vps.mode = exitModes[action - 10]; vps.exitLabel = exitNames[vps.mode]; renderVps(vps);
       }
       if (action === 13 || action === 14) { ++vps.wpsRevision; vps.wpsEnabled = action === 13; vps.wpsLabel = vps.wpsEnabled ? 'On' : 'Off'; renderVps(vps); }
-      if (action === 1 || action === 2) { running = action === 1; show(); }
+      if (action === 1 || action === 2) { ++switchRevision; running = action === 1; show(); }
       if (action === 4) { show(''); await sleep(750); show(); }
       if (action === 3) {
         busy = true;
