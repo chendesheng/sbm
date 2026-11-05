@@ -5,7 +5,7 @@ import { Service, errorMessage } from '../service';
 import { run } from '../system';
 import { AppController, AuthorizationCancelled, type AppAction, type AppModel } from './controller';
 import { nativeRun, nativeRender, nativeRenderVps, nativeAction, nativeAuthorize, nativeAuthorizationResult, nativeAlert, nativeClosing, nativeMainThread } from './native';
-import { VpsClient, VpsController, exitModes, exitNames, type VpsModel } from './vps';
+import { VpsClient, VpsController, vpsOrigin, exitModes, exitNames, type VpsModel } from './vps';
 
 function render(model: AppModel) {
   const status = model.status === 'running' ? 1 : model.status === 'paused' ? 2 : 0;
@@ -50,7 +50,7 @@ async function engine(demo: boolean, check = false) {
       nativeAuthorize(action === 'start' ? 1 : action === 'pause' ? 2 : 3, directory);
     });
   };
-  const vps = new VpsController(new VpsClient(), renderVps, message => nativeAlert(message, true));
+  const vps = new VpsController(new VpsClient(fetch, await vpsOrigin(storage.paths)), renderVps, message => nativeAlert(message, true));
   let vpsRunning = false;
   const controller = new AppController(new Service(storage.paths, run), storage.owner, authorize, model => {
     render(model);
@@ -73,7 +73,10 @@ async function engine(demo: boolean, check = false) {
     const action = nativeAction();
     if (action === 1 || action === 2) void controller.changeState(action === 1 ? 'start' : 'pause');
     if (action === 3) void controller.upgrade();
-    if (action === 4) { void controller.checkForUpdates(); refreshVps(); }
+    if (action === 4) {
+      void controller.checkForUpdates();
+      void controller.refresh().then(refreshVps);
+    }
     if (vpsRunning && action >= 10 && action <= 12) void vps.select(exitModes[action - 10]);
     if (action === 13 || action === 14) void vps.setWps(action === 13, vpsRunning);
     if (Date.now() - lastRefresh >= 5000) { lastRefresh = Date.now(); void controller.refresh().then(refreshVps); }

@@ -33,7 +33,7 @@ test('native fetch downloads stream progress without curl', async () => {
   expect(await compiledFixture('download')).toContain('PASS: native fetch streaming');
 }, 300_000);
 
-test('compiled VPS client controls exits and WPS through the panel API', async () => {
+test('compiled VPS client uses HTTP fetch for exits and WPS without curl', async () => {
   expect(await compiledFixture('vps')).toContain('PASS: native VPS transport');
 }, 300_000);
 

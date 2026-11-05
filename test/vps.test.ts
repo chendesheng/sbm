@@ -1,21 +1,29 @@
-import { expect, test } from 'bun:test';
-import { VpsClient, VpsController, type ExitMode, type ExitStatus, type WpsStatus } from '../src/app/vps';
+import { afterEach, expect, test } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { Paths } from '../src/system';
+import { VpsClient, VpsController, vpsOrigin, type ExitMode, type ExitStatus, type WpsStatus } from '../src/app/vps';
 
 const off: ExitStatus = { mode: 'off', requested_mode: 'off', switch_in_progress: false };
 const stopped: WpsStatus = { available: true, enabled: false, running: false, state: 'inactive' };
-const response = (value: unknown, status = 200) => ({ code: 0, stderr: '', stdout: `${typeof value === 'string' ? value : JSON.stringify(value)}\n${status}` });
+const response = (value: unknown, status = 200) => new Response(typeof value === 'string' ? value : JSON.stringify(value), { status });
 
-test('panel requests use fresh CSRF, matching origin, ordered exit selections, and system TLS', async () => {
+test('panel requests use fresh CSRF, matching origin, ordered exit selections, and HTTP fetch', async () => {
   const requests: { path: string; body: any }[] = [];
   let token = 0;
-  const client = new VpsClient(async args => {
-    expect(args.slice(0, 2)).toEqual(['/usr/bin/curl', '--disable']);
-    expect(args).not.toContain('--insecure'); expect(args).not.toContain('--location');
-    const path = new URL(args.at(-1)!).pathname;
+  const client = new VpsClient(async (url, options) => {
+    expect(url).toStartWith('http://vps.internal/');
+    expect(options.redirect).toBe('error');
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(options.signal!.aborted).toBe(false);
+    const path = new URL(url).pathname;
     if (path === '/') return response(`<body data-csrf="fresh-${++token}">`);
-    expect(args).toContain('Origin: https://vps.internal');
-    expect(args).toContain(`X-CSRF-Token: fresh-${token}`);
-    const body = JSON.parse(args[args.indexOf('--data-raw') + 1]);
+    expect(options.method).toBe('POST');
+    const headers = new Headers(options.headers);
+    expect(headers.get('Origin')).toBe('http://vps.internal');
+    expect(headers.get('X-CSRF-Token')).toBe(`fresh-${token}`);
+    const body = JSON.parse(options.body as string);
     requests.push({ path, body });
     return response(path === '/api/wps' ? { ...stopped, enabled: body.enabled, running: body.enabled } : { accepted: true }, path === '/api/wps' ? 200 : 202);
   });
@@ -30,8 +38,8 @@ test('panel requests use fresh CSRF, matching origin, ordered exit selections, a
 
 test('failed control requests are not replayed and redirects are rejected', async () => {
   let writes = 0;
-  const client = new VpsClient(async args => {
-    if (args.at(-1)!.endsWith('/')) return response('<body data-csrf="token">');
+  const client = new VpsClient(async url => {
+    if (url.endsWith('/')) return response('<body data-csrf="token">');
     writes++; return response({ error: 'invalid token' }, 403);
   });
   await expect(client.select('japan')).rejects.toThrow('unavailable');
@@ -153,4 +161,32 @@ test('a failed latest WPS write restores confirmed state; a click queued before 
   expect(alerts).toHaveLength(1);
   await control.refresh(); await control.setWps(true, false);
   expect(control.model).toMatchObject({ wpsEnabled: false, wpsAvailable: true, wpsRevision: 2 });
+});
+
+const folders: string[] = [];
+afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }); });
+test('HTTP endpoint uses the managed VPS hosts address without a hardcoded server IP', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'sbm-vps-origin-')); folders.push(folder);
+  const paths = new Paths(folder);
+  await writeFile(paths.config, JSON.stringify({ dns: { servers: [
+    { type: 'hosts', predefined: { 'vps.internal': ['not-an-address', '192.0.2.42'] } },
+  ] } }));
+  expect(await vpsOrigin(paths)).toBe('http://192.0.2.42:8787');
+  await writeFile(paths.config, '{}');
+  expect(await vpsOrigin(paths)).toBe('http://vps.internal');
+  await writeFile(paths.config, '{ // JSONC accepted by sing-box\n"dns": {} }');
+  expect(await vpsOrigin(paths)).toBe('http://vps.internal');
+});
+test('HTTP controls send the exact selected endpoint origin with the page CSRF token', async () => {
+  const origin = 'http://192.0.2.42:8787';
+  const requests: string[] = [];
+  const client = new VpsClient(async (url, options) => {
+    requests.push(url);
+    if (url === origin + '/') return response('<body data-csrf="numeric-token">');
+    expect(new Headers(options.headers).get('Origin')).toBe(origin);
+    expect(new Headers(options.headers).get('X-CSRF-Token')).toBe('numeric-token');
+    return response({ accepted: true }, 202);
+  }, origin);
+  await client.select('japan');
+  expect(requests).toEqual([origin + '/', origin + '/api/switch']);
 });

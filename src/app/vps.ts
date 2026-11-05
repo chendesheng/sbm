@@ -1,5 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { run, type Runner } from '../system';
+import { readFile } from 'node:fs/promises';
+import { isIP } from 'node:net';
+import type { Paths } from '../system';
+
+export type VpsRequest = (url: string, options: RequestInit) => Promise<Response>;
 
 export const exitModes = ['off', 'japan', 'usa_la'] as const;
 export type ExitMode = typeof exitModes[number];
@@ -11,27 +15,45 @@ export type VpsModel = {
   wpsEnabled: boolean; wpsLabel: string; wpsAvailable: boolean; wpsRevision: number;
 };
 
-// Apple's curl uses the system trust store, including the user's VPS Internal
-// Root CA. Requests use the existing private route; never bypass TLS checks or
-// follow redirects carrying the panel's CSRF token.
+// The panel's existing numeric HTTP endpoint is forwarded through Xray to its
+// loopback listener. Use the managed hosts mapping to avoid system DNS failures.
+export async function vpsOrigin(paths: Paths): Promise<string> {
+  let config: { dns?: { servers?: { type?: string; predefined?: Record<string, unknown> }[] } };
+  try { config = JSON.parse(await readFile(paths.config, 'utf8')); }
+  catch (error) { if (error instanceof SyntaxError) return 'http://vps.internal'; throw error; }
+  for (const server of config.dns?.servers || []) {
+    if (server.type !== 'hosts') continue;
+    const addresses = server.predefined?.['vps.internal'];
+    const ip = Array.isArray(addresses) ? addresses.find((value: unknown) => typeof value === 'string' && isIP(value) === 4) : undefined;
+    if (ip) return `http://${ip}:8787`;
+  }
+  return 'http://vps.internal';
+}
+
+// Use the same fetch API as release downloads; never redirect or replay writes.
 export class VpsClient {
   private readonly clientId = randomBytes(16).toString('hex');
   private sequence = 0;
-  constructor(private readonly runner: Runner = args => run(args, 50_000)) {}
+  constructor(private readonly requester: VpsRequest = fetch, private readonly origin = 'http://vps.internal') {}
 
   private async request(path: string, body?: object, token = ''): Promise<string> {
-    const args = ['/usr/bin/curl', '--disable', '--silent', '--show-error', '--noproxy', '*',
-      '--proto', '=https', '--connect-timeout', '5', '--max-time', body ? '45' : '15',
-      '--write-out', '\n%{http_code}'];
-    if (body) args.push('--request', 'POST', '--header', 'Content-Type: application/json',
-      '--header', 'Origin: https://vps.internal', '--header', `X-CSRF-Token: ${token}`, '--data-raw', JSON.stringify(body));
-    args.push(`https://vps.internal${path}`);
-    const result = await this.runner(args);
-    const separator = result.stdout.lastIndexOf('\n');
-    const status = Number(result.stdout.slice(separator + 1));
-    if (result.code !== 0 || separator < 0 || !Number.isInteger(status) || status < 200 || status >= 300)
-      throw new Error('VPS connection unavailable. Check the private connection and trusted VPS certificate, then reopen the menu.');
-    return result.stdout.slice(0, separator);
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), body ? 45_000 : 15_000);
+    try {
+      const response = await this.requester(`${this.origin}${path}`, {
+        method: body ? 'POST' : 'GET',
+        redirect: 'error', signal: controller.signal,
+        headers: {
+          'User-Agent': 'sbm/0.1.0',
+          ...(body ? { 'Content-Type': 'application/json', Origin: this.origin, 'X-CSRF-Token': token } : {}),
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.text();
+    } catch {
+      throw new Error('VPS connection unavailable. Check the private connection, then reopen the menu.');
+    } finally { clearTimeout(deadline); }
   }
 
   private async post(path: string, body: object): Promise<unknown> {
