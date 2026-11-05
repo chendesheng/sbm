@@ -36,7 +36,10 @@ await writeFile(paths.config, JSON.stringify({
   ],
   outbounds: [{ type: 'direct', tag: 'normal' }],
   route: { default_domain_resolver: 'local', rules: [{ inbound: 'dns', action: 'hijack-dns' }, { action: 'reject' }] },
-  dns: { servers: [{ type: 'local', tag: 'local' }], rules: [{ action: 'predefined', rcode: 'REFUSED' }] },
+  dns: {
+    servers: [{ type: 'local', tag: 'local' }, { type: 'hosts', tag: 'static', predefined: { 'sbm-route-check.invalid': ['192.0.2.10'] } }],
+    rules: [{ server: 'static', preferred_by: 'static' }, { action: 'predefined', rcode: 'REFUSED' }],
+  },
 }));
 await writeFile(paths.config, await prepareRoutingConfig(paths));
 const check = await run([core, 'check', '-D', base, '-c', paths.config]);
@@ -53,10 +56,11 @@ const service = new Service(paths, async args => {
 async function request(host: string) {
   return run(['/usr/bin/curl', '--silent', '--show-error', '--max-time', '3', '--noproxy', '', '--socks5-hostname', `127.0.0.1:${proxyPort}`, `http://${host}:${address && typeof address !== 'string' ? address.port : 0}`]);
 }
-async function dnsQuery(): Promise<Buffer> {
+async function dnsQuery(name = 'localhost', type = 1): Promise<Buffer> {
   const socket = createDatagram('udp4');
-  // Standard A query for localhost.
-  const query = Buffer.from('123401000001000000000000096c6f63616c686f73740000010001', 'hex');
+  const question = Buffer.from([0, 0, type, 0, 1]);
+  const query = Buffer.concat([Buffer.from('123401000001000000000000', 'hex'),
+    ...name.split('.').map(label => Buffer.concat([Buffer.from([label.length]), Buffer.from(label)])), question]);
   try {
     return await new Promise<Buffer>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('DNS timeout')), 3000);
@@ -66,6 +70,14 @@ async function dnsQuery(): Promise<Buffer> {
     });
   } finally { socket.close(); }
 }
+async function checkHostRecord() {
+  const answer = await dnsQuery('sbm-route-check.invalid');
+  if ((answer[3] & 15) !== 0 || answer.readUInt16BE(6) !== 1 || !answer.subarray(-4).equals(Buffer.from([192, 0, 2, 10])))
+    throw new Error('Configured host record disappeared across the routing switch');
+  const ipv6 = await dnsQuery('sbm-route-check.invalid', 28);
+  if ((ipv6[3] & 15) !== 0 || ipv6.readUInt16BE(6) !== 0)
+    throw new Error('An IPv4-only host must return empty AAAA, not NXDOMAIN');
+}
 try {
   let ready = false;
   for (let n = 0; n < 50; n++) {
@@ -74,8 +86,10 @@ try {
   if (!ready) throw new Error(`Core did not start: ${log}`);
   const pid = child.pid;
   if ((await request('127.0.0.1')).code === 0) throw new Error('Normal routing should reject the request');
-  if (((await dnsQuery())[3] & 15) !== 5) throw new Error('Normal DNS should refuse the query');
+  if (((await dnsQuery('sbm-unlisted.invalid'))[3] & 15) !== 5) throw new Error('Normal DNS should refuse the query');
+  await checkHostRecord();
   await service.pause();
+  await checkHostRecord();
   if (!await service.routingPaused()) throw new Error('Pause was not reflected in status');
   for (const host of ['127.0.0.1', 'localhost']) {
     const result = await request(host);
@@ -86,10 +100,11 @@ try {
   // requireCore checks the managed path; this fixture uses the existing binary.
   await writeFile(paths.core, 'fixture presence marker');
   await service.start();
+  await checkHostRecord();
   if ((await request('127.0.0.1')).code === 0) throw new Error('Resume did not restore routing');
-  if (((await dnsQuery())[3] & 15) !== 5) throw new Error('Resume did not restore DNS');
+  if (((await dnsQuery('sbm-unlisted.invalid'))[3] & 15) !== 5) throw new Error('Resume did not restore DNS');
   if (child.pid !== pid || child.exitCode !== null) throw new Error('Pause/Start changed the core process');
-  console.log('PASS: real sing-box TCP and UDP DNS switch direct and back; same PID, no lifecycle commands or authorization.');
+  console.log('PASS: real sing-box TCP and UDP DNS switch direct and back; static A/AAAA records survive both switches; same PID, no lifecycle commands or authorization.');
 } finally {
   child.kill(); await exited; target.close(); await rm(base, { recursive: true, force: true });
 }

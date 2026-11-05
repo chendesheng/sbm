@@ -28,21 +28,31 @@ function routeRules() {
   ];
 }
 function dnsRule() { return { clash_mode: PAUSED_MODE, action: 'route', server: DNS, disable_cache: true }; }
+function pauseDnsRules(config: Config): Config[] {
+  // Local host records remain valid when routing changes. Sending these names
+  // upstream can create an OS/browser negative cache that outlives Pause.
+  const hosts = (config.dns?.servers || []).filter((server: Config) => server.type === 'hosts' && server.tag);
+  return [...hosts.map((server: Config) => ({
+    clash_mode: PAUSED_MODE, preferred_by: server.tag, action: 'route', server: server.tag,
+  })), dnsRule()];
+}
 function matches(value: Config | undefined, expected: Config): boolean {
   return !!value && Object.keys(value).length === Object.keys(expected).length
     && Object.keys(expected).every(key => value[key] === expected[key]);
 }
-export function isPrepared(config: Config): boolean {
+function preparedWithDnsRules(config: Config, rules: Config[]): boolean {
   return routeRules().every((rule, index) => matches(config.route?.rules?.[index], rule))
-    && matches(config.dns?.rules?.[0], dnsRule())
+    && rules.every((rule, index) => matches(config.dns?.rules?.[index], rule))
     && !!config.outbounds?.some((x: Config) => matches(x, { type: 'direct', tag: DIRECT, domain_resolver: DNS }))
     && !!config.dns?.servers?.some((x: Config) => matches(x, { type: 'local', tag: DNS }));
 }
-export async function routingPauseReady(paths: Paths): Promise<boolean> {
+export function isPrepared(config: Config): boolean { return preparedWithDnsRules(config, pauseDnsRules(config)); }
+function isLegacyPrepared(config: Config): boolean { return preparedWithDnsRules(config, [dnsRule()]); }
+export async function routingPauseReady(paths: Paths, allowLegacy = false): Promise<boolean> {
   let config: Config;
   try { config = JSON.parse(await readFile(paths.config, 'utf8')); }
   catch (error) { if (error instanceof SyntaxError) return false; throw error; }
-  if (!config || !isPrepared(config)) return false;
+  if (!config || !(isPrepared(config) || allowLegacy && isLegacyPrepared(config))) return false;
   controller(config);
   return true;
 }
@@ -57,6 +67,11 @@ async function freePort(): Promise<number> {
 export async function prepareRoutingConfig(paths: Paths): Promise<string> {
   const config = await readConfig(paths);
   if (isPrepared(config)) { controller(config); return JSON.stringify(config, null, 2) + '\n'; }
+  if (isLegacyPrepared(config)) {
+    controller(config);
+    config.dns.rules = [...pauseDnsRules(config), ...config.dns.rules.slice(1)];
+    return JSON.stringify(config, null, 2) + '\n';
+  }
   if (JSON.stringify(config).includes(`"clash_mode":"${PAUSED_MODE}"`) || config.outbounds?.some((x: Config) => x.tag === DIRECT)
       || config.dns?.servers?.some((x: Config) => x.tag === DNS)) throw new Error('Configuration uses reserved sbm pause names. Remove the conflicting entries before setup.');
   config.experimental ??= {};
@@ -71,7 +86,7 @@ export async function prepareRoutingConfig(paths: Paths): Promise<string> {
   if (!config.dns.servers?.length) config.route.default_domain_resolver ??= DNS;
   // Preserve the implicit first-server default when adding our resolver.
   config.dns.servers = [...(config.dns.servers || []), { type: 'local', tag: DNS }];
-  config.dns.rules = [dnsRule(), ...(config.dns.rules || [])];
+  config.dns.rules = [...pauseDnsRules(config), ...(config.dns.rules || [])];
   config.outbounds = [...(config.outbounds || []), { type: 'direct', tag: DIRECT, domain_resolver: DNS }];
   return JSON.stringify(config, null, 2) + '\n';
 }
@@ -81,7 +96,7 @@ export class RoutingMode {
   async pendingResume() { return !!await optionalRead(join(this.paths.base, 'routing-resume.json')); }
   private async request(path: string, method = 'GET', body?: string): Promise<Response> {
     const config = await readConfig(this.paths);
-    if (!isPrepared(config)) throw new Error(setupError);
+    if (!isPrepared(config) && !isLegacyPrepared(config)) throw new Error(setupError);
     const api = controller(config);
     let response: Response;
     try {
@@ -99,7 +114,7 @@ export class RoutingMode {
     return data.mode;
   }
   async paused(): Promise<boolean> {
-    if (!await routingPauseReady(this.paths)) return false;
+    if (!await routingPauseReady(this.paths, true)) return false;
     return await this.mode() === PAUSED_MODE;
   }
   async change(paused: boolean, preserveResume = false): Promise<void> {

@@ -129,3 +129,44 @@ test('existing direct route-set tags do not collide with the pause mode name', a
   const config = JSON.parse(await prepareRoutingConfig(f.paths));
   expect(config.route.rules[2].rule_set).toBe('sbm-direct-priority');
 });
+
+test('preserves every configured hosts resolver during Pause without changing normal DNS policy', async () => {
+  const f = await fixture();
+  const config = JSON.parse(f.prepared);
+  const hosts = [
+    { type: 'hosts', tag: 'static', predefined: { 'panel.internal': ['192.0.2.10'] } },
+    { type: 'hosts', tag: 'files', path: ['/etc/hosts'] },
+  ];
+  config.dns.servers.push(...hosts);
+  await writeFile(f.paths.config, JSON.stringify(config));
+  expect(await routingPauseReady(f.paths)).toBe(false);
+  const upgraded = JSON.parse(await prepareRoutingConfig(f.paths));
+  expect(upgraded.dns.rules.slice(0, 2)).toEqual(hosts.map(server => ({
+    clash_mode: PAUSED_MODE, preferred_by: server.tag, action: 'route', server: server.tag,
+  })));
+  expect(upgraded.dns.rules.slice(2)).toEqual(config.dns.rules);
+  expect(upgraded.dns.servers).toEqual(config.dns.servers);
+  expect(upgraded.route).toEqual(config.route);
+  expect(upgraded.experimental).toEqual(config.experimental);
+  await writeFile(f.paths.config, JSON.stringify(upgraded, null, 2) + '\n');
+  expect(await routingPauseReady(f.paths)).toBe(true);
+  expect(JSON.parse(await prepareRoutingConfig(f.paths))).toEqual(upgraded);
+});
+
+test('old configurations remain readable and resumable before the DNS setup upgrade', async () => {
+  const f = await fixture();
+  const config = JSON.parse(f.prepared);
+  config.dns.servers.push({ type: 'hosts', tag: 'static', predefined: { 'panel.internal': ['192.0.2.10'] } });
+  await writeFile(f.paths.config, JSON.stringify(config));
+  await writeFile(f.paths.core, 'core');
+  await f.routing.change(true);
+  expect(await f.routing.paused()).toBe(true);
+  expect(await routingPauseReady(f.paths)).toBe(false);
+  const service = new Service(f.paths, async args => {
+    expect(args).toEqual(['/bin/launchctl', 'print', f.paths.target]);
+    return { code: 0, stderr: '', stdout: 'state = running\npid = 101\n' };
+  });
+  expect(await service.start()).toContain('resumed');
+  expect(f.mode).toBe('Global');
+  expect(await f.routing.pendingResume()).toBe(false);
+});

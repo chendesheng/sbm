@@ -98,7 +98,7 @@ export class Service {
     const before = await this.state();
     if (!source && before.pid) {
       const routing = new RoutingMode(this.paths);
-      if (await this.routingPauseReady() && (await routing.paused() || await routing.pendingResume())) {
+      if (await routingPauseReady(this.paths, true) && (await routing.paused() || await routing.pendingResume())) {
         await routing.change(false);
         return 'sing-box resumed. Normal routing restored.';
       }
