@@ -78,11 +78,11 @@ describe('service', () => {
     const f = await fixture(); await rm(f.paths.config);
     await expect(f.service.start()).rejects.toThrow('--config'); expect(f.launches).toBe(0);
   });
-  test('repeated start and pause do not duplicate launches; boot setting survives', async () => {
+  test('repeated start and lifecycle stop do not duplicate launches; boot setting survives', async () => {
     const f = await fixture();
     await f.service.enable(); expect((await f.service.state()).loaded).toBe(false);
     await f.service.start(); expect(await f.service.start()).toContain('already running'); expect(f.launches).toBe(1);
-    await f.service.pause(); await f.service.pause(); expect(await exists(f.paths.bootPlist)).toBe(true);
+    await f.service.stop(); await f.service.stop(); expect(await exists(f.paths.bootPlist)).toBe(true);
     await f.service.start(); await f.service.disable(); expect((await f.service.state()).pid).toBeDefined();
     expect(await exists(f.paths.bootPlist)).toBe(false);
   });

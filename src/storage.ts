@@ -113,7 +113,7 @@ export async function migrateStorage(service: Service, owner: Owner): Promise<vo
       const originals = new Map<string, Buffer>();
       const moved: string[] = [];
       try {
-        if (before.loaded) await legacyService.pause();
+        if (before.loaded) await legacyService.stop();
         for (const name of names) { await rename(join(legacy.base, name), join(paths.base, name)); moved.push(name); }
         for (const name of ['config.json', 'config.json.previous']) {
           const path = join(paths.base, name), data = await optionalRead(path);
@@ -130,7 +130,7 @@ export async function migrateStorage(service: Service, owner: Owner): Promise<vo
         await registerStorage(paths, owner);
       } catch (error) {
         try {
-          if (before.loaded) await service.pause();
+          if (before.loaded) await service.stop();
           for (const [path, data] of originals) await atomicWrite(path, data);
           // prepare() may create empty bin/logs directories on an incomplete install.
           for (const name of moved.reverse()) await rename(join(paths.base, name), join(legacy.base, name));

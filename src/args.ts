@@ -4,7 +4,7 @@ Usage:
   sbm install [--version <version>]  Install the latest stable or selected core
   sbm upgrade [--version <version>]  Alias of install
   sbm start [--config <file>]        Start; optionally apply a configuration
-  sbm pause                        Pause until start or the next enabled boot
+  sbm pause                        Route all traffic directly; keep sing-box running
   sbm status                       Show state, version, config and log paths
   sbm enable                       Enable boot startup; do not start now
   sbm disable                      Disable boot startup; do not pause now

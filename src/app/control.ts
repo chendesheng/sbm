@@ -15,7 +15,7 @@ async function main() {
   await withDataLock(storage.paths, storage.owner, async () => {
     await storage.paths.prepare();
     if (action === 'start') console.log(await service.start());
-    else if (action === 'pause') await service.pause();
+    else if (action === 'pause') { await service.prepareRoutingPause(); await service.pause(); }
     else console.log(await activatePreparedInstall(service, resolve(args[1])));
   });
 }

@@ -14,6 +14,10 @@ async function readable<T>(action: () => Promise<T>, fallback: T): Promise<T> {
 export async function statusText(service: Service, legacy = false): Promise<string> {
   const paths = service.paths;
   const state = await service.state();
+  const routing = state.pid ? await service.routingPaused().catch(() => undefined) : false;
+  const stateLabel = state.pid
+    ? routing === undefined ? 'running (routing unknown)' : routing ? 'paused (direct routing; core running)' : 'running'
+    : state.loaded ? state.state : 'paused';
   const unavailable = legacy ? 'unavailable (one-time storage migration required)' : 'unavailable (private to the service owner)';
   const core = await readable(async () => await exists(paths.core) ? service.version() : 'not installed', unavailable);
   const configuredLog = await readable(() => service.configuredLogPath(), undefined);
@@ -24,7 +28,7 @@ export async function statusText(service: Service, legacy = false): Promise<stri
   catch { size = 'unavailable'; }
   return [
     `Core: ${core}`,
-    `State: ${state.pid ? 'running' : state.loaded ? state.state : 'paused'}${state.pid ? ` (PID ${state.pid})` : ''}`,
+    `State: ${stateLabel}${state.pid ? ` (PID ${state.pid})` : ''}`,
     `Boot startup: ${await exists(paths.bootPlist) ? 'enabled' : 'disabled'}`,
     `Config: ${paths.config}${saved}`,
     `Stdout log: ${paths.stdout}`, `Stderr log: ${paths.stderr}`,

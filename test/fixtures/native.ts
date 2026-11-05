@@ -104,7 +104,7 @@ async function smoke() {
     await rejects(() => restoreConfig(service, backup), 'Invalid restore must reject');
     check(active && await readFile(paths.config, 'utf8') === '{"current":true}', 'Restore rollback failed');
     invalid = false;
-    await service.pause(); await restoreConfig(service, backup);
+    await service.stop(); await restoreConfig(service, backup);
     check(!active, 'Paused restore started the service');
     const legacy = new Paths(join(root, 'legacy'), join(root, 'migration-boot'));
     await legacy.prepare();

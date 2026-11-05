@@ -2,6 +2,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { readFile, rm, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { Paths, type Runner, checked, exists, atomicWrite, optionalRead, restoreFile } from './system';
+import { RoutingMode, routingPauseReady, prepareRoutingConfig } from './routing-mode';
 
 export type ServiceState = { loaded: boolean; pid?: number; state: string };
 export async function coreVersion(runner: Runner, core: string): Promise<string> {
@@ -52,14 +53,29 @@ export class Service {
       if (config.log?.output) return resolve(this.paths.base, config.log.output);
     } catch { /* Service stdout/stderr locations are still reported. */ }
   }
-  async pause() {
+  async routingPauseReady() { return routingPauseReady(this.paths); }
+  async routingPaused() { return new RoutingMode(this.paths).paused(); }
+  async pause(preserveResume = false) {
+    if (!(await this.state()).loaded) return;
+    await new RoutingMode(this.paths).change(true, preserveResume);
+  }
+  async prepareRoutingPause() {
+    if (await this.routingPauseReady()) return;
+    const candidate = `${this.paths.config}.${crypto.randomUUID()}.pause-setup`;
+    try {
+      await atomicWrite(candidate, await prepareRoutingConfig(this.paths));
+      await this.start(candidate);
+    } finally { await rm(candidate, { force: true }); }
+  }
+  // Lifecycle operations still need to unload the core before replacing files.
+  async stop() {
     if (!(await this.state()).loaded) return;
     await checked(this.runner, ['/bin/launchctl', 'bootout', this.paths.target]);
     for (let n = 0; n < this.timing.attempts; n++) {
       if (!(await this.state()).loaded) return;
       await sleep(this.timing.interval);
     }
-    throw new Error('Timed out waiting for sing-box to pause.');
+    throw new Error('Timed out waiting for sing-box to stop.');
   }
   async launch() {
     await mkdir(this.paths.systemBase, { recursive: true, mode: 0o755 });
@@ -80,7 +96,15 @@ export class Service {
   async start(source?: string): Promise<string> {
     await this.requireCore();
     const before = await this.state();
-    if (!source && before.pid) return 'sing-box is already running.';
+    if (!source && before.pid) {
+      const routing = new RoutingMode(this.paths);
+      if (await this.routingPauseReady() && (await routing.paused() || await routing.pendingResume())) {
+        await routing.change(false);
+        return 'sing-box resumed. Normal routing restored.';
+      }
+      return 'sing-box is already running.';
+    }
+    const wasPaused = !!before.pid && await this.routingPaused();
     const old = await optionalRead(this.paths.config);
     const candidate = `${this.paths.config}.${crypto.randomUUID()}.candidate`;
     try {
@@ -90,15 +114,19 @@ export class Service {
         await this.validate(this.paths.core, candidate);
       } else await this.validate();
       if (old && source) await atomicWrite(`${this.paths.config}.previous`, old);
-      if (before.loaded) await this.pause();
+      if (before.loaded) await this.stop();
       try {
         if (source) await atomicWrite(this.paths.config, await readFile(candidate));
         await this.launch();
+        if (await this.routingPaused()) await new RoutingMode(this.paths).change(false);
       } catch (error) {
         try {
-          await this.pause();
+          await this.stop();
           await restoreFile(this.paths.config, old);
-          if (before.loaded && old) await this.launch();
+          if (before.loaded && old) {
+            await this.launch();
+            if (wasPaused) await this.pause(true);
+          }
         } catch (rollback) {
           throw new Error(`${errorMessage(error)} Rollback failed: ${errorMessage(rollback)}`);
         }

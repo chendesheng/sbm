@@ -2,7 +2,7 @@ import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Service, errorMessage } from '../service';
 import { exists } from '../system';
-import { requireOwner, type Owner } from '../storage';
+import { requireOwner, withDataLock, type Owner } from '../storage';
 import { activatePreparedAsUser, fetchRelease, releaseEndpoint, selectAsset, withPreparedInstall, type Fetcher, type Release } from '../install';
 import { download, type Downloader } from '../download';
 import { defaultCacheRoot } from '../cache';
@@ -64,7 +64,7 @@ export class AppController {
     try {
       const state = await this.service.state();
       this.model.loaded = state.loaded;
-      this.model.status = state.pid ? 'running' : state.loaded ? 'waiting' : 'paused';
+      this.model.status = state.pid ? await this.service.routingPaused() ? 'paused' : 'running' : state.loaded ? 'waiting' : 'paused';
       const installed = await exists(this.service.paths.core);
       if (installed) {
         const stamp = (await stat(this.service.paths.core)).mtimeMs;
@@ -112,7 +112,14 @@ export class AppController {
     try {
       requireOwner(this.owner);
       const state = await this.service.state();
-      if (action === 'start' && state.pid || action === 'pause' && !state.loaded) return;
+      if (action === 'pause' && !state.loaded) return;
+      if (action === 'start' && state.pid || action === 'pause' && await this.service.routingPauseReady()) {
+        await withDataLock(this.service.paths, this.owner, async () => {
+          if (action === 'start') await this.service.start();
+          else await this.service.pause();
+        });
+        return;
+      }
       if (action === 'start') { await this.service.requireCore(); await this.service.validate(); }
       await this.authorize(action, '');
     } catch (error) { if (!(error instanceof AuthorizationCancelled)) this.alert(errorMessage(error), true); }

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { open, readFile, readdir, lstat, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { atomicWrite, exists, optionalRead, restoreFile, writeNewFile, type Paths } from './system';
+import { prepareRoutingConfig } from './routing-mode';
 import { Service, errorMessage } from './service';
 
 const MAX_FILE = 32 * 1024 * 1024;
@@ -13,7 +14,7 @@ type Entry = { path: string; member: string; size: number; sha256: string };
 type Manifest = { format: 'sbm-config-backup'; version: 1; bootEnabled: boolean; files: Entry[] };
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 const digest = (data: Uint8Array) => createHash('sha256').update(data).digest('hex');
-const excluded = (path: string) => ['bin', 'logs', '.lock'].includes(path.split('/')[0]) || /^\.(backup|restore|install)-/.test(path.split('/')[0]) || ['service.plist', 'cache.db', 'cache.db-shm', 'cache.db-wal'].includes(path);
+const excluded = (path: string) => ['bin', 'logs', '.lock'].includes(path.split('/')[0]) || /^\.(backup|restore|install)-/.test(path.split('/')[0]) || ['routing-resume.json', 'service.plist', 'cache.db', 'cache.db-shm', 'cache.db-wal'].includes(path);
 function validPath(path: string): boolean {
   return !!path && !isAbsolute(path) && !path.includes('\\') && !path.split('/').some(x => !x || x === '.' || x === '..') && !excluded(path);
 }
@@ -157,18 +158,20 @@ export async function restoreConfig(service: Service, archive: string): Promise<
     for (const [path] of contents) previous.set(path, await optionalRead(join(paths.base, path)));
     const oldBoot = await optionalRead(paths.bootPlist);
     const before = await service.state();
+    const wasPaused = !!before.pid && await service.routingPaused();
     try {
-      if (before.loaded) await service.pause();
+      if (before.loaded) await service.stop();
       for (const [path, data] of contents) await atomicWrite(join(paths.base, path), data);
+      if (wasPaused && !await service.routingPauseReady()) await atomicWrite(paths.config, await prepareRoutingConfig(paths));
       await service.validate();
       if (manifest.bootEnabled) await service.enable(); else await service.disable();
-      if (before.loaded) await service.launch();
+      if (before.loaded) { await service.launch(); if (wasPaused) await service.pause(true); }
     } catch (error) {
       try {
-        await service.pause();
+        await service.stop();
         for (const [path, data] of previous) await restoreFile(join(paths.base, path), data);
         await restoreFile(paths.bootPlist, oldBoot, 0o644);
-        if (before.loaded) await service.launch();
+        if (before.loaded) { await service.launch(); if (wasPaused) await service.pause(true); }
       } catch (rollback) { throw new Error(`${errorMessage(error)} Rollback failed: ${errorMessage(rollback)}`); }
       throw new Error(`${errorMessage(error)} Previous configuration and service state restored.`);
     }

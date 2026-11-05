@@ -89,12 +89,16 @@ async function main(): Promise<number> {
   if (!storage.legacy) {
     if (args.command === 'start') {
       await service.requireCore();
-      if (!args.value && (await service.state()).pid) { console.log('sing-box is already running.'); return 0; }
+      if (!args.value && (await service.state()).pid) {
+        await withDataLock(paths, storage.owner, async () => console.log(await service.start())); return 0;
+      }
     }
     if (args.command === 'pause' && !(await service.state()).loaded) { console.log('sing-box paused. Boot setting preserved.'); return 0; }
     if (args.command === 'disable' && !await exists(paths.bootPlist)) { console.log('Boot startup disabled. Current running state unchanged.'); return 0; }
   }
-  const protectedAction = ['start', 'pause', 'enable', 'disable'].includes(args.command) || args.command === 'config' && args.configAction === 'restore';
+  const pauseSetup = args.command === 'pause' && !await service.routingPauseReady();
+  if (pauseSetup) console.log('One-time routing pause setup requires a service restart. Future Pause/Start switches need no administrator password.');
+  const protectedAction = ['start', 'enable', 'disable'].includes(args.command) || pauseSetup || args.command === 'config' && args.configAction === 'restore';
   if (protectedAction && process.getuid?.() !== 0) return elevate(raw);
   if (process.getuid?.() === 0) await preparePrivileged(service, storage.owner, storage.legacy);
   else if (!await exists(paths.base)) throw new Error('No saved configuration. Run sbm install and sbm start --config <file> first.');
@@ -102,7 +106,9 @@ async function main(): Promise<number> {
     switch (args.command) {
       case 'install': console.log(await install(service, args.value)); break;
       case 'start': console.log(await service.start(args.value)); break;
-      case 'pause': await service.pause(); console.log('sing-box paused. Boot setting preserved.'); break;
+      case 'pause':
+        if (pauseSetup) await service.prepareRoutingPause();
+        await service.pause(); console.log('Paused: all traffic routes directly; sing-box remains running.'); break;
       case 'enable': await service.enable(); console.log('Boot startup enabled. Current running state unchanged.'); break;
       case 'disable': await service.disable(); console.log('Boot startup disabled. Current running state unchanged.'); break;
       case 'config':

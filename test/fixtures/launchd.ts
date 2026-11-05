@@ -49,11 +49,11 @@ try {
   if (!(await service.state()).pid || !JSON.parse(await readFile(rulePath, 'utf8')).rules.length) throw new Error('Running restore failed.');
   const restored = await run(['/usr/bin/curl', '--fail', '--silent', '--show-error', '--max-time', '5', '--noproxy', '', '--socks5-hostname', `127.0.0.1:${port}`, `http://127.0.0.1:${address.port}`]);
   if (restored.code !== 0 || restored.stdout !== 'sbm smoke ok') throw new Error(`Restored proxy failed: ${restored.stderr}`);
-  await service.pause();
+  await service.stop();
   console.log(await restoreConfig(service, backup));
   if ((await service.state()).loaded) throw new Error('Paused restore unexpectedly started the job.');
   await service.start();
-  await service.enable(); await service.pause(); await service.pause();
+  await service.enable(); await service.stop(); await service.stop();
   if ((await service.state()).loaded) throw new Error('Pause did not unload the job.');
   console.log(await service.start()); await service.disable();
   console.log(await install(service));
@@ -67,6 +67,6 @@ try {
   console.log(`PASS: official core, real launchd, running/paused backup restore, repeated start/pause, loopback SOCKS traffic, boot-file enable/disable, idempotent install. Logs: ${paths.stderr}`);
   console.log('PASS: live user-path migration preserves actual SOCKS traffic.');
 } finally {
-  try { await service.pause(); }
+  try { await service.stop(); }
   finally { target.close(); await rm(base, { recursive: true, force: true }); }
 }

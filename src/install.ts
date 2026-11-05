@@ -153,16 +153,17 @@ export async function activatePreparedInstall(service: Service, directory: strin
     if (await exists(p.config)) await service.validate(binary);
     const old = await optionalRead(p.core);
     const before = await service.state();
-    if (before.loaded) await service.pause();
+    const wasPaused = !!before.pid && await service.routingPaused();
+    if (before.loaded) await service.stop();
     try {
       if (old) await atomicWrite(`${p.core}.previous`, old, 0o755);
       await rename(binary, p.core);
-      if (before.loaded) await service.launch();
+      if (before.loaded) { await service.launch(); if (wasPaused) await service.pause(true); }
     } catch (error) {
       try {
-        await service.pause();
+        await service.stop();
         await restoreFile(p.core, old, 0o755);
-        if (before.loaded && old) await service.launch();
+        if (before.loaded && old) { await service.launch(); if (wasPaused) await service.pause(true); }
       } catch (rollback) {
         throw new Error(`${errorMessage(error)} Rollback failed: ${errorMessage(rollback)}`);
       }

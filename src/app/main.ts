@@ -9,7 +9,7 @@ import { VpsClient, VpsController, exitModes, exitNames, type VpsModel } from '.
 
 function render(model: AppModel) {
   const status = model.status === 'running' ? 1 : model.status === 'paused' ? 2 : 0;
-  nativeRender(status, model.version, model.busy, model.loaded, model.canStart, model.canUpgrade, model.upgradeLabel);
+  nativeRender(status, model.version, model.busy, model.loaded && model.status !== 'paused', model.canStart, model.canUpgrade, model.upgradeLabel);
 }
 
 function renderVps(model: VpsModel) {

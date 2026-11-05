@@ -1,4 +1,6 @@
 import { beforeAll, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dir, '..');
@@ -39,4 +41,9 @@ test('menu bar app builds and calls its C bridge from a native worker without No
   await execute([process.execPath, 'scripts/build-app.mjs']);
   const output = await execute([resolve(root, 'dist/sbm.app/Contents/MacOS/sbm'), '--worker-check'], { ...process.env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' });
   expect(output).toContain('PASS: ScriptC worker thread calls the native C bridge.');
+}, 300_000);
+
+const routingCore = process.env.SBM_TEST_CORE || resolve(homedir(), 'Library/Application Support/sbm/bin/sing-box');
+test.skipIf(!existsSync(routingCore))('compiled routing pause changes real TCP and UDP DNS without restarting sing-box', async () => {
+  expect(await compiledFixture('routing')).toContain('PASS: real sing-box TCP and UDP DNS');
 }, 300_000);
