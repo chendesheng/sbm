@@ -27,6 +27,25 @@ await new Promise<void>(resolve => target.listen(0, '127.0.0.1', resolve));
 const address = target.address();
 if (!address || typeof address === 'string') throw new Error('No HTTP address');
 const proxyPort = await port(), dnsPort = await port();
+// The authoritative server owns the names. Change its answer while paused to
+// prove the client forwards queries rather than keeping a local host inventory.
+let privateName = 'first.devices.test', privateQueries = 0;
+const authoritative = createDatagram('udp4');
+authoritative.on('message', (query, peer) => {
+  let end = 12;
+  const labels: string[] = [];
+  while (query[end]) { const size = query[end++]; labels.push(query.subarray(end, end + size).toString()); end += size; }
+  const type = query.readUInt16BE(end + 1);
+  const known = labels.join('.') === privateName;
+  const header = Buffer.from(query.subarray(0, 12));
+  header.writeUInt16BE(known ? 0x8580 : 0x8583, 2);
+  header.writeUInt16BE(known && type === 1 ? 1 : 0, 6);
+  header.writeUInt16BE(0, 8); header.writeUInt16BE(0, 10);
+  const answer = known && type === 1 ? Buffer.from('c00c00010001000000000004c0000214', 'hex') : Buffer.alloc(0);
+  privateQueries++;
+  authoritative.send(Buffer.concat([header, query.subarray(12, end + 5), answer]), peer.port, peer.address);
+});
+await new Promise<void>(resolve => authoritative.bind(0, '127.0.0.1', resolve));
 await paths.prepare();
 await writeFile(paths.config, JSON.stringify({
   log: { level: 'error' },
@@ -42,6 +61,10 @@ await writeFile(paths.config, JSON.stringify({
   },
 }));
 await writeFile(paths.config, await prepareRoutingConfig(paths));
+const config = JSON.parse(await Bun.file(paths.config).text());
+config.dns.servers.push({ type: 'udp', tag: 'private', server: '127.0.0.1', server_port: authoritative.address().port });
+config.dns.rules.unshift({ domain_suffix: ['devices.test'], action: 'route', server: 'private', disable_cache: true });
+await writeFile(paths.config, JSON.stringify(config));
 const check = await run([core, 'check', '-D', base, '-c', paths.config]);
 if (check.code) throw new Error(check.stderr);
 const child = spawn(core, ['run', '-D', base, '-c', paths.config], { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -78,6 +101,12 @@ async function checkHostRecord() {
   if ((ipv6[3] & 15) !== 0 || ipv6.readUInt16BE(6) !== 0)
     throw new Error('An IPv4-only host must return empty AAAA, not NXDOMAIN');
 }
+async function checkPrivateRecord() {
+  const before = privateQueries;
+  const answer = await dnsQuery(privateName);
+  if ((answer[3] & 15) !== 0 || !answer.subarray(-4).equals(Buffer.from([192, 0, 2, 20])) || privateQueries <= before)
+    throw new Error('Private zone query did not reach its authoritative server');
+}
 try {
   let ready = false;
   for (let n = 0; n < 50; n++) {
@@ -88,8 +117,11 @@ try {
   if ((await request('127.0.0.1')).code === 0) throw new Error('Normal routing should reject the request');
   if (((await dnsQuery('sbm-unlisted.invalid'))[3] & 15) !== 5) throw new Error('Normal DNS should refuse the query');
   await checkHostRecord();
+  await checkPrivateRecord();
   await service.pause();
   await checkHostRecord();
+  privateName = 'added-while-paused.devices.test';
+  await checkPrivateRecord();
   if (!await service.routingPaused()) throw new Error('Pause was not reflected in status');
   for (const host of ['127.0.0.1', 'localhost']) {
     const result = await request(host);
@@ -101,10 +133,11 @@ try {
   await writeFile(paths.core, 'fixture presence marker');
   await service.start();
   await checkHostRecord();
+  await checkPrivateRecord();
   if ((await request('127.0.0.1')).code === 0) throw new Error('Resume did not restore routing');
   if (((await dnsQuery('sbm-unlisted.invalid'))[3] & 15) !== 5) throw new Error('Resume did not restore DNS');
   if (child.pid !== pid || child.exitCode !== null) throw new Error('Pause/Start changed the core process');
-  console.log('PASS: real sing-box TCP and UDP DNS switch direct and back; static A/AAAA records survive both switches; same PID, no lifecycle commands or authorization.');
+  console.log('PASS: real sing-box routing and DNS switch direct and back; static A/AAAA survive; private DNS reaches its server including a name added while paused; same PID, no lifecycle commands or authorization.');
 } finally {
-  child.kill(); await exited; target.close(); await rm(base, { recursive: true, force: true });
+  child.kill(); await exited; target.close(); authoritative.close(); await rm(base, { recursive: true, force: true });
 }

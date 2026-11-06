@@ -40,9 +40,16 @@ function matches(value: Config | undefined, expected: Config): boolean {
   return !!value && Object.keys(value).length === Object.keys(expected).length
     && Object.keys(expected).every(key => value[key] === expected[key]);
 }
+function dnsRulesOffset(config: Config, rules: Config[]): number {
+  const existing: Config[] = config.dns?.rules || [];
+  // Explicit DNS policies may precede the managed Pause block, for example a
+  // private zone whose authoritative resolver must remain reachable in Pause.
+  const offset = existing.findIndex(rule => rule.clash_mode === PAUSED_MODE);
+  return offset >= 0 && rules.every((rule, index) => matches(existing[offset + index], rule)) ? offset : -1;
+}
 function preparedWithDnsRules(config: Config, rules: Config[]): boolean {
   return routeRules().every((rule, index) => matches(config.route?.rules?.[index], rule))
-    && rules.every((rule, index) => matches(config.dns?.rules?.[index], rule))
+    && dnsRulesOffset(config, rules) >= 0
     && !!config.outbounds?.some((x: Config) => matches(x, { type: 'direct', tag: DIRECT, domain_resolver: DNS }))
     && !!config.dns?.servers?.some((x: Config) => matches(x, { type: 'local', tag: DNS }));
 }
@@ -69,7 +76,8 @@ export async function prepareRoutingConfig(paths: Paths): Promise<string> {
   if (isPrepared(config)) { controller(config); return JSON.stringify(config, null, 2) + '\n'; }
   if (isLegacyPrepared(config)) {
     controller(config);
-    config.dns.rules = [...pauseDnsRules(config), ...config.dns.rules.slice(1)];
+    const offset = dnsRulesOffset(config, [dnsRule()]);
+    config.dns.rules = [...config.dns.rules.slice(0, offset), ...pauseDnsRules(config), ...config.dns.rules.slice(offset + 1)];
     return JSON.stringify(config, null, 2) + '\n';
   }
   if (JSON.stringify(config).includes(`"clash_mode":"${PAUSED_MODE}"`) || config.outbounds?.some((x: Config) => x.tag === DIRECT)

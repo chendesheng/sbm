@@ -170,3 +170,33 @@ test('old configurations remain readable and resumable before the DNS setup upgr
   expect(f.mode).toBe('Global');
   expect(await f.routing.pendingResume()).toBe(false);
 });
+
+test('explicit DNS policies before the Pause block survive setup and mode switches', async () => {
+  const f = await fixture();
+  const config = JSON.parse(f.prepared);
+  const policy = { domain_suffix: ['devices.test'], action: 'route', server: 'original' };
+  config.dns.rules.unshift(policy);
+  await writeFile(f.paths.config, JSON.stringify(config));
+  expect(await routingPauseReady(f.paths)).toBe(true);
+  expect(JSON.parse(await prepareRoutingConfig(f.paths))).toEqual(config);
+  await f.routing.change(true); await f.routing.change(false);
+  expect(f.mode).toBe('Global');
+  expect(JSON.parse(await readFile(f.paths.config, 'utf8'))).toEqual(config);
+
+  config.dns.servers.push({ type: 'hosts', tag: 'static', predefined: { 'panel.test': ['192.0.2.10'] } });
+  await writeFile(f.paths.config, JSON.stringify(config));
+  const upgraded = JSON.parse(await prepareRoutingConfig(f.paths));
+  expect(upgraded.dns.rules[0]).toEqual(policy);
+  expect(upgraded.dns.rules[1].preferred_by).toBe('static');
+  expect(upgraded.dns.rules.slice(2)).toEqual(config.dns.rules.slice(1));
+});
+
+test('a DNS exception cannot hide a damaged managed Pause block', async () => {
+  const f = await fixture();
+  const config = JSON.parse(f.prepared);
+  config.dns.rules.unshift({ domain_suffix: ['devices.test'], server: 'original' });
+  config.dns.rules[1].server = 'original';
+  await writeFile(f.paths.config, JSON.stringify(config));
+  expect(await routingPauseReady(f.paths)).toBe(false);
+  await expect(prepareRoutingConfig(f.paths)).rejects.toThrow('reserved');
+});
