@@ -61,7 +61,6 @@ async function engine(demo: boolean, check = false) {
   const refreshVps = () => { if (vpsRunning) void vps.refresh(); };
   await controller.refresh();
   if (check) { controller.alert('Native alert callback check.', false); return; }
-  let lastRefresh = Date.now();
   while (!nativeClosing()) {
     nativeAuthorizationResult((code, message) => {
       const request = pending;
@@ -79,7 +78,6 @@ async function engine(demo: boolean, check = false) {
     }
     if (vpsRunning && action >= 10 && action <= 12) void vps.select(exitModes[action - 10]);
     if (action === 13 || action === 14) void vps.setWps(action === 13, vpsRunning);
-    if (Date.now() - lastRefresh >= 5000) { lastRefresh = Date.now(); void controller.refresh().then(refreshVps); }
     await sleep(50);
   }
   controller.abort.abort();
