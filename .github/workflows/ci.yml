@@ -101,6 +101,9 @@ jobs:
           Write-Host "hello obj exit: $LASTEXITCODE"
           & $compiler.FullName coverage hello.ts 2>&1 | Write-Host
           Write-Host "coverage exit: $LASTEXITCODE"
+          & $compiler.FullName build src/cli.ts -o dist/cli-plain.exe
+          Write-Host "cli plain exit: $LASTEXITCODE"
+          if (Test-Path dist/cli-plain.exe) { Get-Item dist/cli-plain.exe | Format-List Name,Length }
 
       - name: Verify CLI
         run: |
