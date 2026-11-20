@@ -1,4 +1,4 @@
-export const HELP = `sbm 0.1.0 — sing-box manager
+export const HELP = `sbm 0.1.1 — sing-box manager
 
 Usage:
   sbm install [--version <version>]  Install the latest stable or selected core

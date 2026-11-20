@@ -35,7 +35,7 @@ async function smoke() {
     check(child.code === 0 && child.stdout === 'native child\n', 'Native self invocation failed');
     const cli = resolve('dist/sbm');
     const version = await run([cli, '--version']);
-    check(version.code === 0 && version.stdout === '0.1.0\n', 'CLI version failed');
+    check(version.code === 0 && version.stdout === '0.1.1\n', 'CLI version failed');
     const bad = await run([cli, 'unknown']);
     check(bad.code !== 0 && bad.stderr.includes('Unknown command'), 'CLI error status failed');
     const status = await run([cli, 'status']);

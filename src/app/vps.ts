@@ -44,7 +44,7 @@ export class VpsClient {
         method: body ? 'POST' : 'GET',
         redirect: 'error', signal: controller.signal,
         headers: {
-          'User-Agent': 'sbm/0.1.0',
+          'User-Agent': 'sbm/0.1.1',
           ...(body ? { 'Content-Type': 'application/json', Origin: this.origin, 'X-CSRF-Token': token } : {}),
         },
         ...(body ? { body: JSON.stringify(body) } : {}),

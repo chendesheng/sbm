@@ -19,7 +19,7 @@ export type PreparationOptions = {
 };
 export type Fetcher = (url: string) => Promise<Response>;
 export const fetchRelease: Fetcher = async (url) => fetch(url, {
-  headers: { 'User-Agent': 'sbm/0.1.0', Accept: 'application/vnd.github+json' },
+  headers: { 'User-Agent': 'sbm/0.1.1', Accept: 'application/vnd.github+json' },
   signal: AbortSignal.timeout(120_000),
 });
 export function releaseEndpoint(version?: string) {

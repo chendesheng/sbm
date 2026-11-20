@@ -71,7 +71,7 @@ async function main(): Promise<number> {
   }
   const args = parseArgs(raw);
   if (args.command === 'help') { console.log(HELP); return 0; }
-  if (args.command === 'version') { console.log('0.1.0'); return 0; }
+  if (args.command === 'version') { console.log('0.1.1'); return 0; }
   if (!isMacos() && !isWindows()) throw new Error('sbm supports macOS and Windows only.');
   if (!['arm64', 'x64'].includes(process.arch)) throw new Error(`Unsupported architecture: ${process.arch}.`);
   if (args.command === 'install') releaseEndpoint(args.value);

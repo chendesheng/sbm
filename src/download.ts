@@ -31,7 +31,7 @@ export const download: Downloader = async (url, destination, options = {}) => {
     for (let redirects = 0; redirects <= 10; redirects++) {
       const connecting = setTimeout(() => controller.abort(new Error('Download connection timed out.')), 20_000);
       try {
-        response = await request(current, { redirect: 'manual', signal: controller.signal, headers: { 'User-Agent': 'sbm/0.1.0', 'Accept-Encoding': 'identity' } });
+        response = await request(current, { redirect: 'manual', signal: controller.signal, headers: { 'User-Agent': 'sbm/0.1.1', 'Accept-Encoding': 'identity' } });
       } finally { clearTimeout(connecting); }
       if (![301, 302, 303, 307, 308].includes(response.status)) break;
       const location = response.headers.get('location');

@@ -24,7 +24,10 @@ export async function readRegistration(systemBase = SYSTEM_BASE): Promise<Regist
 }
 
 export async function invokingOwner(): Promise<Owner & { home: string }> {
-  let home = homedir(), uid = process.getuid?.() ?? 0, gid = process.getgid?.() ?? 0;
+  let home = homedir();
+  // Windows has no uid/gid and the ScriptC runtime does not implement them.
+  if (isWindows()) return { home, uid: 0, gid: 0 };
+  let uid = process.getuid?.() ?? 0, gid = process.getgid?.() ?? 0;
   if (uid === 0 && process.env.SUDO_USER && process.env.SUDO_UID && process.env.SUDO_GID) {
     if (!/^\d+$/.test(process.env.SUDO_UID) || !/^\d+$/.test(process.env.SUDO_GID)) throw new Error('Invalid sudo user identity.');
     uid = Number(process.env.SUDO_UID); gid = Number(process.env.SUDO_GID);
