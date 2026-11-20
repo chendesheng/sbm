@@ -33,7 +33,7 @@ SCRIPTC_TARGET=x86_64-windows-gnu SCRIPTC_RUNTIME_PACK="$PWD/package" \
   bun scripts/build.mjs src/cli.ts dist/sbm.exe
 ```
 
-On Windows itself, install Bun, Node.js 24 and zig, then run `bun install --frozen-lockfile` and `bun scripts/build.mjs src/cli.ts dist/sbm.exe`.
+Windows release binaries are cross-compiled on macOS. ScriptC 0.4.7's native Windows compiler currently overflows its stack while compiling this codebase, so CI runs the Windows platform tests natively but builds the executable from macOS.
 
 ## Build and install the CLI
 
@@ -52,7 +52,7 @@ The compiled executable requires neither Bun nor Node.js on the target machine. 
 
 ## CI and releases
 
-CI typechecks, runs `bun run test:source`, builds the menu bar app and CLI on macOS arm64, and builds the CLI on Windows x64.
+CI typechecks, runs `bun run test:source`, builds the menu bar app and macOS CLI on arm64, cross-builds the Windows CLI from macOS, and runs the Windows platform tests natively.
 
 Pushing a `v*` tag whose number matches `package.json` runs the release workflow. Keep the version printed by `sbm --version` in `src/cli.ts` in sync with `package.json`; the release build refuses a mismatch. It builds and publishes:
 

@@ -1,0 +1,28 @@
+name: Setup Zig
+description: Install a pinned Zig toolchain for the Windows cross-build
+
+inputs:
+  version:
+    description: Zig version
+    required: false
+    default: '0.17.0'
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        ZIG_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          arm64|aarch64) zig_arch=aarch64 ;;
+          x86_64|amd64) zig_arch=x86_64 ;;
+          *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+        esac
+        url="https://ziglang.org/download/${ZIG_VERSION}/zig-${zig_arch}-macos-${ZIG_VERSION}.tar.xz"
+        curl -fsSL "$url" -o "$RUNNER_TEMP/zig.tar.xz"
+        mkdir -p "$RUNNER_TEMP/zig"
+        tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP/zig" --strip-components=1
+        echo "$RUNNER_TEMP/zig" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/zig/zig" version

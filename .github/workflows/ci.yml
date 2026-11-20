@@ -18,15 +18,18 @@ jobs:
     name: macOS arm64
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
+
+      - name: Install zig
+        uses: ./.github/actions/setup-zig
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -49,24 +52,30 @@ jobs:
       - name: Build menu bar app
         run: bun run build:app
 
-  windows-x64:
-    name: Windows x64
+      - name: Build Windows CLI (cross)
+        run: |
+          set -euo pipefail
+          mkdir -p .runtime
+          npm pack --silent @scriptc/runtime-win32-x64-msvc@0.4.7 --pack-destination .runtime > /dev/null
+          mkdir -p .runtime/win32
+          tar -xzf .runtime/scriptc-runtime-win32-x64-msvc-0.4.7.tgz -C .runtime/win32 --strip-components=1
+          SCRIPTC_TARGET=x86_64-windows-gnu SCRIPTC_RUNTIME_PACK="$PWD/.runtime/win32" \
+            bun scripts/build.mjs src/cli.ts dist/sbm.exe
+          file dist/sbm.exe | grep -q 'PE32+'
+
+  windows-x64-tests:
+    name: Windows x64 tests
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
-
-      - name: Install zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -76,36 +85,3 @@ jobs:
 
       - name: Windows platform tests
         run: bun test test/platform.test.ts
-
-      - name: Build CLI
-        run: bun scripts/build.mjs src/cli.ts dist/sbm.exe
-
-      - name: Diagnose build failure
-        if: failure()
-        run: |
-          Get-ChildItem node_modules/scriptc/bin | Format-Table Name,Length
-          Get-ChildItem node_modules/@scriptc | Select-Object Name
-          $compiler = Get-Item node_modules/scriptc/bin/scriptc.exe
-          Write-Host "compiler size: $($compiler.Length)"
-          if ($compiler.Length -lt 1MB) { Get-Content $compiler.FullName }
-          & $compiler.FullName --version
-          Write-Host "compiler exit: $LASTEXITCODE"
-          Write-Host "zig: $(zig version)"
-          Get-Content node_modules/scriptc/bin/scriptc.exe.json
-          [IO.File]::WriteAllText("$PWD\hello.ts", "console.log('hello')`n")
-          & $compiler.FullName build hello.ts -o hello.exe 2>&1 | Write-Host
-          Write-Host "hello exe exit: $LASTEXITCODE"
-          & $compiler.FullName build hello.ts --emit=ir -o hello.ll 2>&1 | Write-Host
-          Write-Host "hello ir exit: $LASTEXITCODE"
-          & $compiler.FullName build hello.ts --emit=obj -o hello.obj 2>&1 | Write-Host
-          Write-Host "hello obj exit: $LASTEXITCODE"
-          & $compiler.FullName coverage hello.ts 2>&1 | Write-Host
-          Write-Host "coverage exit: $LASTEXITCODE"
-          & $compiler.FullName build src/cli.ts -o dist/cli-plain.exe
-          Write-Host "cli plain exit: $LASTEXITCODE"
-          if (Test-Path dist/cli-plain.exe) { Get-Item dist/cli-plain.exe | Format-List Name,Length }
-
-      - name: Verify CLI
-        run: |
-          .\dist\sbm.exe --version
-          .\dist\sbm.exe --help
