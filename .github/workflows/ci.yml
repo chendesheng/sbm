@@ -90,6 +90,17 @@ jobs:
           if ($compiler.Length -lt 1MB) { Get-Content $compiler.FullName }
           & $compiler.FullName --version
           Write-Host "compiler exit: $LASTEXITCODE"
+          Write-Host "zig: $(zig version)"
+          Get-Content node_modules/scriptc/bin/scriptc.exe.json
+          [IO.File]::WriteAllText("$PWD\hello.ts", "console.log('hello')`n")
+          & $compiler.FullName build hello.ts -o hello.exe 2>&1 | Write-Host
+          Write-Host "hello exe exit: $LASTEXITCODE"
+          & $compiler.FullName build hello.ts --emit=ir -o hello.ll 2>&1 | Write-Host
+          Write-Host "hello ir exit: $LASTEXITCODE"
+          & $compiler.FullName build hello.ts --emit=obj -o hello.obj 2>&1 | Write-Host
+          Write-Host "hello obj exit: $LASTEXITCODE"
+          & $compiler.FullName coverage hello.ts 2>&1 | Write-Host
+          Write-Host "coverage exit: $LASTEXITCODE"
 
       - name: Verify CLI
         run: |
