@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { scriptcCompiler } from './scriptc.mjs';
@@ -14,7 +14,14 @@ if (process.platform === 'darwin') {
   env.PATH = `/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH || ''}`;
 }
 mkdirSync(dirname(output), { recursive: true });
+writeSync(2, 'sbm build: preparing compiler\n');
 const compiler = scriptcCompiler();
 const build = spawnSync(compiler, ['build', entry, '--strip', '--no-keep-llvm', '-o', output], { env, stdio: 'inherit' });
-if (build.error) throw new Error(`Cannot run ScriptC at ${compiler}: ${build.error.message}. Install scriptc 0.4.7 or set SCRIPTC to its executable.`);
-if (build.status !== 0) process.exit(build.status ?? 1);
+if (build.error) {
+  writeSync(2, `Cannot run ScriptC at ${compiler}: ${build.error.message}\n`);
+  throw new Error(`Cannot run ScriptC at ${compiler}: ${build.error.message}. Install scriptc 0.4.7 or set SCRIPTC to its executable.`);
+}
+if (build.status !== 0) {
+  writeSync(2, `ScriptC exited with ${build.status}.\n`);
+  process.exit(build.status ?? 1);
+}

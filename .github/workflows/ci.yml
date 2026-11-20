@@ -80,6 +80,17 @@ jobs:
       - name: Build CLI
         run: bun scripts/build.mjs src/cli.ts dist/sbm.exe
 
+      - name: Diagnose build failure
+        if: failure()
+        run: |
+          Get-ChildItem node_modules/scriptc/bin | Format-Table Name,Length
+          Get-ChildItem node_modules/@scriptc | Select-Object Name
+          $compiler = Get-Item node_modules/scriptc/bin/scriptc.exe
+          Write-Host "compiler size: $($compiler.Length)"
+          if ($compiler.Length -lt 1MB) { Get-Content $compiler.FullName }
+          & $compiler.FullName --version
+          Write-Host "compiler exit: $LASTEXITCODE"
+
       - name: Verify CLI
         run: |
           .\dist\sbm.exe --version
