@@ -3,6 +3,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { mkdir, chmod, open, writeFile, rename, rm, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { coreName, defaultBootDir, defaultSystemRoot, defaultUserRoot, hostPlatform, isWindows, runStateName, startupScriptName, type PlatformKind } from './platform';
 
 export type Result = { code: number; stdout: string; stderr: string };
 export type Runner = (args: string[]) => Promise<Result>;
@@ -38,27 +39,49 @@ export async function exists(path: string): Promise<boolean> {
   }
 }
 export const LABEL = 'io.github.chendesheng.sbm.sing-box';
-export const SYSTEM_BASE = '/Library/Application Support/sbm';
+export const SYSTEM_BASE = defaultSystemRoot('macos');
 export const userDataRoot = (home = homedir()) => join(home, 'Library/Application Support/sbm');
 export class Paths {
-  constructor(readonly base = userDataRoot(), readonly bootDir = '/Library/LaunchDaemons', readonly label = LABEL, readonly domain = 'system', readonly systemBase = base === userDataRoot() && domain === 'system' ? SYSTEM_BASE : base) {}
-  get core() { return join(this.base, 'bin/sing-box'); }
+  readonly base: string;
+  readonly bootDir: string;
+  readonly label: string;
+  readonly domain: string;
+  readonly systemBase: string;
+  readonly kind: PlatformKind;
+  constructor(base = defaultUserRoot(), bootDir = defaultBootDir(), label = LABEL, domain = 'system', systemBase?: string, kind: PlatformKind = hostPlatform) {
+    this.base = base;
+    this.bootDir = bootDir;
+    this.label = label;
+    this.domain = domain;
+    this.kind = kind;
+    this.systemBase = systemBase ?? (isWindows(kind) ? base : base === userDataRoot() && domain === 'system' ? SYSTEM_BASE : base);
+  }
+  // Windows keeps every managed file in the per-user directory and registers
+  // login startup in the user's Startup folder instead of launchd.
+  static windows(base: string, bootDir: string, label = LABEL): Paths {
+    return new Paths(base, bootDir, label, 'user', base, 'windows');
+  }
+  static macos(base: string, bootDir: string, label = LABEL): Paths {
+    return new Paths(base, bootDir, label, 'system', base, 'macos');
+  }
+  get core() { return join(this.base, 'bin', coreName(this.kind)); }
   get config() { return join(this.base, 'config.json'); }
-  get plist() { return join(this.systemBase, 'service.plist'); }
+  get plist() { return join(this.systemBase, isWindows(this.kind) ? 'service.json' : 'service.plist'); }
   get registration() { return join(this.systemBase, 'owner.json'); }
-  get bootPlist() { return join(this.bootDir, `${this.label}.plist`); }
+  get bootPlist() { return join(this.bootDir, isWindows(this.kind) ? startupScriptName() : `${this.label}.plist`); }
+  get runState() { return join(this.base, runStateName()); }
   get stdout() { return join(this.base, 'logs/stdout.log'); }
   get stderr() { return join(this.base, 'logs/stderr.log'); }
   get target() { return `${this.domain}/${this.label}`; }
   async prepare() {
     await mkdir(this.base, { recursive: true, mode: 0o700 });
-    await chmod(this.base, 0o700);
+    if (!isWindows(this.kind)) await chmod(this.base, 0o700);
     await mkdir(join(this.base, 'bin'), { recursive: true, mode: 0o700 });
     await mkdir(join(this.base, 'logs'), { recursive: true, mode: 0o700 });
     for (const file of [this.stdout, this.stderr]) {
       const handle = await open(file, 'a', 0o600);
       await handle.close();
-      await chmod(file, 0o600);
+      if (!isWindows(this.kind)) await chmod(file, 0o600);
     }
   }
 }

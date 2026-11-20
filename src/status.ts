@@ -1,4 +1,5 @@
 import { Service } from './service';
+import { isWindows } from './platform';
 import { exists } from './system';
 import { statusCacheRoot, cacheSize, formatCacheSize } from './cache';
 
@@ -10,7 +11,7 @@ async function readable<T>(action: () => Promise<T>, fallback: T): Promise<T> {
   }
 }
 
-// Reading launchd's state does not require access to the private data directory.
+// Reading the host's state does not require access to the private data directory.
 export async function statusText(service: Service, legacy = false): Promise<string> {
   const paths = service.paths;
   const state = await service.state();
@@ -19,6 +20,7 @@ export async function statusText(service: Service, legacy = false): Promise<stri
     ? routing === undefined ? 'running (routing unknown)' : routing ? 'paused (direct routing; core running)' : 'running'
     : state.loaded ? state.state : 'paused';
   const unavailable = legacy ? 'unavailable (one-time storage migration required)' : 'unavailable (private to the service owner)';
+  const bootLabel = isWindows(paths.kind) ? 'Start at sign-in' : 'Boot startup';
   const core = await readable(async () => await exists(paths.core) ? service.version() : 'not installed', unavailable);
   const configuredLog = await readable(() => service.configuredLogPath(), undefined);
   const saved = await readable(async () => await exists(paths.config) ? '' : ' (not saved)', ' (unavailable)');
@@ -29,7 +31,7 @@ export async function statusText(service: Service, legacy = false): Promise<stri
   return [
     `Core: ${core}`,
     `State: ${stateLabel}${state.pid ? ` (PID ${state.pid})` : ''}`,
-    `Boot startup: ${await exists(paths.bootPlist) ? 'enabled' : 'disabled'}`,
+    `${bootLabel}: ${(await service.bootEnabled()) ? 'enabled' : 'disabled'}`,
     `Config: ${paths.config}${saved}`,
     `Stdout log: ${paths.stdout}`, `Stderr log: ${paths.stderr}`,
     ...(configuredLog ? [`Configured core log: ${configuredLog}`] : []),

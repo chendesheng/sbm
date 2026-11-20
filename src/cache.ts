@@ -1,11 +1,12 @@
 import { lstat, readdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join, isAbsolute } from 'node:path';
 import { checked, run } from './system';
+import { defaultCacheRoot as platformCacheRoot, isWindows } from './platform';
 
-export function defaultCacheRoot() { return join(homedir(), 'Library/Caches/sbm'); }
+export function defaultCacheRoot() { return platformCacheRoot(); }
 
 export async function statusCacheRoot(): Promise<string> {
+  if (isWindows()) return defaultCacheRoot();
   // sudo replaces HOME; report the cache used by the original install caller.
   if (process.getuid?.() === 0 && process.env.SUDO_USER) {
     const output = await checked(run, ['/usr/bin/dscl', '.', '-read', `/Users/${process.env.SUDO_USER}`, 'NFSHomeDirectory']);

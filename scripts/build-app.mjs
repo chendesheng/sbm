@@ -43,7 +43,7 @@ const functions = [
 ];
 const manifest = join(build, 'ffi.json');
 writeFileSync(manifest, JSON.stringify({ ffi_format: 7, libraries: [object], frameworks: ['AppKit', 'Foundation'], functions }));
-const compiler = process.env.SCRIPTC || join(root, 'node_modules/.bin/scriptc');
+const compiler = process.env.SCRIPTC || join(root, 'node_modules/scriptc/bin/scriptc.exe');
 execute(compiler, ['build', 'src/app/main.ts', '--ffi', manifest, '--strip', '--no-keep-llvm', '-o', join(macos, 'sbm')]);
 execute(process.execPath, ['scripts/build.mjs', 'src/app/control.ts', join(macos, 'sbm-control')]);
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;

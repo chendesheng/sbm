@@ -7,6 +7,7 @@ import { checked, exists, atomicWrite, optionalRead, restoreFile, run, type Runn
 import { download, type Downloader, type DownloadProgress } from './download';
 import { defaultCacheRoot } from './cache';
 import { withDataLock, type Owner } from './storage';
+import { coreName, hostPlatform, isWindows, type PlatformKind } from './platform';
 
 type Asset = { name: string; browser_download_url: string; digest?: string | null };
 export type Release = { tag_name: string; draft: boolean; prerelease: boolean; assets: Asset[] };
@@ -25,25 +26,29 @@ export function releaseEndpoint(version?: string) {
   if (version && !/^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Invalid version; expected e.g. 1.14.4.');
   return `https://api.github.com/repos/SagerNet/sing-box/releases/${version ? `tags/v${version.replace(/^v/, '')}` : 'latest'}`;
 }
-export function selectAsset(release: Release, arch: string): { asset: Asset; version: string; folder: string } {
+export function selectAsset(release: Release, arch: string, kind: PlatformKind = hostPlatform): { asset: Asset; version: string; folder: string; binary: string } {
   const cpu = arch === 'arm64' ? 'arm64' : arch === 'x64' ? 'amd64' : undefined;
   if (!cpu) throw new Error(`Unsupported architecture: ${arch}`);
   const version = release.tag_name.replace(/^v/, '');
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) || release.draft) throw new Error('Invalid release metadata.');
-  const folder = `sing-box-${version}-darwin-${cpu}`;
-  const asset = release.assets.find(a => a.name === `${folder}.tar.gz`);
-  if (!asset) throw new Error(`Official release has no ${cpu} macOS archive.`);
+  const windows = isWindows(kind);
+  const folder = `sing-box-${version}-${windows ? 'windows' : 'darwin'}-${cpu}`;
+  const asset = release.assets.find(a => a.name === `${folder}.${windows ? 'zip' : 'tar.gz'}`);
+  if (!asset) throw new Error(`Official release has no ${cpu} ${windows ? 'Windows' : 'macOS'} archive.`);
   if (!/^sha256:[a-f0-9]{64}$/i.test(asset.digest || '')) throw new Error('Release has no published SHA-256 digest; refusing an unverified installation.');
   if (!asset.browser_download_url.startsWith('https://github.com/SagerNet/sing-box/releases/download/')) throw new Error('Unexpected release download URL.');
-  return { asset, version, folder };
+  return { asset, version, folder, binary: coreName(kind) };
 }
+
+function tarTool(kind: PlatformKind): string { return isWindows(kind) ? 'tar.exe' : '/usr/bin/tar'; }
+function tarFlags(kind: PlatformKind): string { return isWindows(kind) ? '-xf' : '-xzf'; }
 async function response(fetcher: Fetcher, url: string) {
   const result = await fetcher(url);
   if (!result.ok) throw new Error(`Download failed: HTTP ${result.status} from ${url}`);
   return result;
 }
 export async function install(service: Service, requested?: string, fetcher = fetchRelease, arch = process.arch, downloader: Downloader = download, cacheRoot = defaultCacheRoot()): Promise<string> {
-  return withPreparedInstall(requested, directory => activatePreparedInstall(service, directory, arch), fetcher, arch, downloader, service.runner, cacheRoot);
+  return withPreparedInstall(requested, directory => activatePreparedInstall(service, directory, arch), fetcher, arch, downloader, service.runner, cacheRoot, {}, service.paths.kind);
 }
 
 async function cachedArchive(asset: Asset, folder: string, downloader: Downloader, cacheRoot: string, options: PreparationOptions): Promise<Buffer> {
@@ -82,13 +87,13 @@ async function cachedArchive(asset: Asset, folder: string, downloader: Downloade
 }
 
 // Prepare in the caller's user cache and private temporary directory, never managed state.
-export async function withPreparedInstall<T>(requested: string | undefined, activate: (directory: string) => Promise<T>, fetcher = fetchRelease, arch = process.arch, downloader: Downloader = download, runner: Runner = run, cacheRoot = defaultCacheRoot(), options: PreparationOptions = {}): Promise<T> {
+export async function withPreparedInstall<T>(requested: string | undefined, activate: (directory: string) => Promise<T>, fetcher = fetchRelease, arch = process.arch, downloader: Downloader = download, runner: Runner = run, cacheRoot = defaultCacheRoot(), options: PreparationOptions = {}, kind: PlatformKind = hostPlatform): Promise<T> {
   if (options.signal?.aborted) throw new Error('Upgrade cancelled.');
   console.log(requested ? `Checking sing-box ${requested} release...` : 'Checking the latest stable sing-box release...');
   const metadata = options.release || await (await response(fetcher, releaseEndpoint(requested))).json() as Release;
   if (!requested && metadata.prerelease) throw new Error('Latest stable release unexpectedly resolves to a prerelease.');
   if (requested && metadata.tag_name !== `v${requested.replace(/^v/, '')}`) throw new Error('Release version does not match the requested version.');
-  const { asset, version, folder } = selectAsset(metadata, arch);
+  const { asset, version, folder, binary: name } = selectAsset(metadata, arch, kind);
   const archive = await cachedArchive(asset, folder, downloader, cacheRoot, options);
   if (options.signal?.aborted) throw new Error('Upgrade cancelled.');
   const stage = await mkdtemp(join(tmpdir(), 'sbm-download-'));
@@ -96,10 +101,10 @@ export async function withPreparedInstall<T>(requested: string | undefined, acti
     const archivePath = join(stage, 'release.tar.gz');
     await atomicWrite(archivePath, archive);
     await mkdir(join(stage, 'extracted'));
-    await checked(runner, ['/usr/bin/tar', '-xzf', archivePath, '-C', join(stage, 'extracted'), `${folder}/sing-box`]);
-    const binary = join(stage, 'extracted', folder, 'sing-box');
+    await checked(runner, [tarTool(kind), tarFlags(kind), archivePath, '-C', join(stage, 'extracted'), `${folder}/${name}`]);
+    const binary = join(stage, 'extracted', folder, name);
     if (!(await lstat(binary)).isFile()) throw new Error('Release executable is not a regular file.');
-    await chmod(binary, 0o755);
+    if (!isWindows(kind)) await chmod(binary, 0o755);
     if (await coreVersion(runner, binary) !== version) throw new Error('Downloaded core reports an unexpected version.');
     await atomicWrite(join(stage, 'release.json'), JSON.stringify(metadata));
     console.log(`Verified sing-box ${version}.`);
@@ -113,9 +118,9 @@ function verifyArchive(archive: Uint8Array, asset: Asset) {
   if (`sha256:${digest}` !== asset.digest?.toLowerCase()) throw new Error('Archive SHA-256 mismatch; existing installation left unchanged.');
 }
 
-async function preparedVersion(directory: string, arch: string): Promise<string> {
+async function preparedVersion(directory: string, arch: string, kind: PlatformKind): Promise<string> {
   const metadata = JSON.parse((await readFile(join(directory, 'release.json'))).toString()) as Release;
-  return selectAsset(metadata, arch).version;
+  return selectAsset(metadata, arch, kind).version;
 }
 
 export async function activatePreparedAsUser(service: Service, directory: string, owner: Owner, authorize: () => Promise<number>, arch = process.arch): Promise<number> {
@@ -124,7 +129,7 @@ export async function activatePreparedAsUser(service: Service, directory: string
   // Never hold the user lock while waiting for the sudo child to acquire it.
   await withDataLock(service.paths, owner, async () => {
     const state = await service.state();
-    const current = await exists(service.paths.core) && await service.version() === await preparedVersion(directory, arch);
+    const current = await exists(service.paths.core) && await service.version() === await preparedVersion(directory, arch, service.paths.kind);
     if (state.loaded && !current) needsRoot = true;
     else console.log(await activatePreparedInstall(service, directory, arch));
   });
@@ -134,21 +139,23 @@ export async function activatePreparedAsUser(service: Service, directory: string
 // Called after elevation. Snapshot and recheck the archive before using it as root.
 export async function activatePreparedInstall(service: Service, directory: string, arch = process.arch): Promise<string> {
   const metadata = JSON.parse(await readFile(join(directory, 'release.json'), 'utf8')) as Release;
-  const { asset, version, folder } = selectAsset(metadata, arch);
+  const kind = service.paths.kind;
+  const { asset, version, folder, binary: name } = selectAsset(metadata, arch, kind);
   const archive = await readFile(join(directory, 'release.tar.gz'));
   verifyArchive(archive, asset);
   const p = service.paths;
   if (await exists(p.core) && await service.version() === version) return `sing-box ${version} is already installed.`;
+  await p.prepare();
   console.log(`Installing sing-box ${version}...`);
   const stage = await mkdtemp(join(p.base, '.install-'));
   try {
     const archivePath = join(stage, 'release.tar.gz');
     await atomicWrite(archivePath, archive);
     await mkdir(join(stage, 'extracted'));
-    await checked(service.runner, ['/usr/bin/tar', '-xzf', archivePath, '-C', join(stage, 'extracted'), `${folder}/sing-box`]);
-    const binary = join(stage, 'extracted', folder, 'sing-box');
+    await checked(service.runner, [tarTool(kind), tarFlags(kind), archivePath, '-C', join(stage, 'extracted'), `${folder}/${name}`]);
+    const binary = join(stage, 'extracted', folder, name);
     if (!(await lstat(binary)).isFile()) throw new Error('Release executable is not a regular file.');
-    await chmod(binary, 0o755);
+    if (!isWindows(kind)) await chmod(binary, 0o755);
     if (await service.version(binary) !== version) throw new Error('Downloaded core reports an unexpected version.');
     if (await exists(p.config)) await service.validate(binary);
     const old = await optionalRead(p.core);

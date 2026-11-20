@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createServer as createSocket } from 'node:net';
 import { createSocket as createDatagram } from 'node:dgram';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -61,7 +61,7 @@ await writeFile(paths.config, JSON.stringify({
   },
 }));
 await writeFile(paths.config, await prepareRoutingConfig(paths));
-const config = JSON.parse(await Bun.file(paths.config).text());
+const config = JSON.parse(await readFile(paths.config, 'utf8'));
 config.dns.servers.push({ type: 'udp', tag: 'private', server: '127.0.0.1', server_port: authoritative.address().port });
 config.dns.rules.unshift({ domain_suffix: ['devices.test'], action: 'route', server: 'private', disable_cache: true });
 await writeFile(paths.config, JSON.stringify(config));

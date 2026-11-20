@@ -45,5 +45,5 @@ test('menu bar app builds and calls its C bridge from a native worker without No
 
 const routingCore = process.env.SBM_TEST_CORE || resolve(homedir(), 'Library/Application Support/sbm/bin/sing-box');
 test.skipIf(!existsSync(routingCore))('compiled routing pause changes real TCP and UDP DNS without restarting sing-box', async () => {
-  expect(await compiledFixture('routing')).toContain('PASS: real sing-box TCP and UDP DNS');
+  expect(await compiledFixture('routing')).toContain('PASS: real sing-box routing and DNS switch direct and back');
 }, 300_000);

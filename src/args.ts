@@ -1,4 +1,4 @@
-export const HELP = `sbm 0.1.0 — macOS sing-box manager
+export const HELP = `sbm 0.1.0 — sing-box manager
 
 Usage:
   sbm install [--version <version>]  Install the latest stable or selected core
@@ -6,8 +6,8 @@ Usage:
   sbm start [--config <file>]        Start; optionally apply a configuration
   sbm pause                        Route all traffic directly; keep sing-box running
   sbm status                       Show state, version, config and log paths
-  sbm enable                       Enable boot startup; do not start now
-  sbm disable                      Disable boot startup; do not pause now
+  sbm enable                       Enable startup at boot/sign-in; do not start now
+  sbm disable                      Disable startup; do not pause now
   sbm config route list [--priority]
   sbm config route add|remove --outbound direct (--ip <address>|--domain <name>|--domain_suffix <name>) [--priority]
   sbm config backup --file <file.zip>   Back up managed configuration and assets
@@ -16,6 +16,8 @@ Usage:
   sbm --version
 
 start never installs a core. Run sbm install first.
+On macOS sing-box runs as a launchd service; on Windows it runs in user mode
+and starts at sign-in without administrator rights.
 `;
 export type Command = 'install' | 'start' | 'pause' | 'status' | 'enable' | 'disable' | 'help' | 'version' | 'config';
 export type RouteArgs = { action: 'list' | 'add' | 'remove'; priority: boolean; field?: 'ip_cidr' | 'domain' | 'domain_suffix'; value?: string; outbound?: string };

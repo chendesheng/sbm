@@ -1,6 +1,39 @@
 # sbm
 
-A small macOS manager for [sing-box](https://github.com/SagerNet/sing-box), with a CLI and native menu bar app, written in TypeScript and compiled to native code with [ScriptC](https://scriptc.dev). The CLI exits after each command; launchd runs sing-box directly. Supports Apple Silicon and Intel Macs.
+[![CI](https://github.com/chendesheng/sbm/actions/workflows/ci.yml/badge.svg)](https://github.com/chendesheng/sbm/actions/workflows/ci.yml)
+
+A small manager for [sing-box](https://github.com/SagerNet/sing-box), with a CLI and a native macOS menu bar app, written in TypeScript and compiled to native code with [ScriptC](https://scriptc.dev). On macOS the CLI exits after each command and launchd runs sing-box directly; on Windows the CLI runs sing-box as an ordinary user process. Supports Apple Silicon Macs, plus a user-mode Windows x64 port in progress.
+
+## Windows user mode
+
+The Windows port deliberately avoids the Windows Service Control Manager, `ProgramData`, TUN, and elevation. sing-box runs with the invoking user's token, so sbm never needs an administrator password or a UAC prompt. A Windows sing-box configuration should therefore use proxy inbounds (such as `mixed`, `socks`, or `http`) rather than a TUN inbound, which still requires administrator rights.
+
+Managed state lives under `%LOCALAPPDATA%\sbm`:
+
+| Path | Purpose |
+| --- | --- |
+| `bin\sing-box.exe` | Official core executable |
+| `config.json` | Last successfully applied configuration |
+| `logs\stdout.log`, `logs\stderr.log` | Captured core output |
+| `run.json` | PID and image name of the detached core |
+| `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\sbm-sing-box.vbs` | Hidden sign-in launcher written by `enable` |
+
+`install` selects the official `sing-box-<version>-windows-amd64.zip` release, verifies its published SHA-256 digest, and extracts `sing-box.exe` with the built-in `tar.exe`. `start` launches the core detached, records its PID, and keeps the CLI non-blocking. `pause` and `start` switch routing through the prepared Clash API exactly as on macOS, without restarting the core. `enable` writes a hidden `wscript` launcher to the user's Startup folder, so "boot startup" begins at sign-in; `disable` removes it. Updating a running core stops and restarts only the invoking user's process, without authorization.
+
+The official archive also ships `libcronet.dll`; sbm currently installs only `sing-box.exe`. A configuration that uses the bundled cronet outbound must copy that DLL into `bin\` beside the core.
+
+Not ported yet: configuration backup/restore (which still uses `zip`/`unzip`), the menu bar app, and administrator/TUN mode. Backup and restore fail with an explicit message on Windows; the other two are unavailable. Windows arm64 also runs through the x64 build, because ScriptC currently targets Windows x64 only.
+
+To cross-compile the CLI from macOS or Linux, fetch ScriptC's Windows runtime pack and set the target. Linking uses zig, so it must be on `PATH`:
+
+```sh
+npm pack @scriptc/runtime-win32-x64-msvc@0.4.7
+tar -xzf scriptc-runtime-win32-x64-msvc-0.4.7.tgz
+SCRIPTC_TARGET=x86_64-windows-gnu SCRIPTC_RUNTIME_PACK="$PWD/package" \
+  bun scripts/build.mjs src/cli.ts dist/sbm.exe
+```
+
+On Windows itself, install Bun, Node.js 24 and zig, then run `bun install --frozen-lockfile` and `bun scripts/build.mjs src/cli.ts dist/sbm.exe`.
 
 ## Build and install the CLI
 
@@ -15,7 +48,31 @@ mkdir -p "$HOME/.local/bin"
 install -m 755 dist/sbm "$HOME/.local/bin/sbm"
 ```
 
-The compiled executable requires neither Bun nor Node.js on the target machine. ScriptC links its own native support code, with no JavaScript engine. Builds use the host architecture: build on arm64 for arm64 and on Intel for x64. Add `~/.local/bin` to your `PATH` if necessary; installing the CLI there needs no sudo.
+The compiled executable requires neither Bun nor Node.js on the target machine. ScriptC links its own native support code, with no JavaScript engine. Released macOS binaries target Apple Silicon. Add `~/.local/bin` to your `PATH` if necessary; installing the CLI there needs no sudo.
+
+## CI and releases
+
+CI typechecks, runs `bun run test:source`, builds the menu bar app and CLI on macOS arm64, and builds the CLI on Windows x64.
+
+Pushing a `v*` tag whose number matches `package.json` runs the release workflow. Keep the version printed by `sbm --version` in `src/cli.ts` in sync with `package.json`; the release build refuses a mismatch. It builds and publishes:
+
+| Asset | Platform |
+| --- | --- |
+| `sbm-macos-arm64` | macOS 14 or later on Apple Silicon |
+| `sbm-windows-x64.exe` | Windows 10/11 x64 |
+| `SHA256SUMS` | SHA-256 checksums for both binaries |
+
+The macOS binary is ad-hoc signed but not notarized, and the Windows binary is unsigned, so Gatekeeper or SmartScreen may ask for confirmation. The release contains the CLI only, not the macOS menu bar app.
+
+```sh
+# macOS Apple Silicon
+curl -LO https://github.com/chendesheng/sbm/releases/latest/download/sbm-macos-arm64
+chmod +x sbm-macos-arm64
+xattr -d com.apple.quarantine sbm-macos-arm64 2>/dev/null || true
+./sbm-macos-arm64 --version
+```
+
+On Windows, download `sbm-windows-x64.exe`, verify it against `SHA256SUMS`, and put it on `PATH`. The full `bun test` suite compiles the native fixtures as well; `bun run test:source` runs the faster source-only suite used by CI.
 
 ## Menu bar app
 
@@ -152,6 +209,6 @@ All tests live under `test/` and run together with `bun test`. The suite builds 
 
 App tests cover stopped/running updates, password-free routing Pause/Start, validation before authorization, cancellation, stale Start/Pause clicks, and version comparisons. Downloader tests cover binary streams, byte progress, redirects, size mismatches, cancellation, and cleanup. Compiled tests verify a real chunked network response with incremental progress, an official HTTPS core download into a disposable cache without activation, and the app's native worker/FFI startup with no Node or Bun on `PATH`.
 
-The launchd test runs as part of the same suite. Run tests as your logged-in macOS user with Xcode Command Line Tools installed and network access to GitHub. It downloads or reuses the verified official core, exercises the same lifecycle code in a disposable **user** launchd domain, and verifies actual SOCKS traffic to a loopback HTTP server before and after moving the core and configuration to a user Library path. It removes its job and files afterwards. Source and compiled tests also cover migration rollback, path collisions, ownership records, unprivileged status, paused core updates, and cancellation before a running update. Privileged system-service activation, password-prompt cancellation, actual reboot persistence, Intel builds, and real TUN/private-network traffic still require separate runtime verification.
+The launchd test runs as part of the same suite. Run tests as your logged-in macOS user with Xcode Command Line Tools installed and network access to GitHub. It downloads or reuses the verified official core, exercises the same lifecycle code in a disposable **user** launchd domain, and verifies actual SOCKS traffic to a loopback HTTP server before and after moving the core and configuration to a user Library path. It removes its job and files afterwards. Source and compiled tests also cover migration rollback, path collisions, ownership records, unprivileged status, paused core updates, and cancellation before a running update. Privileged system-service activation, password-prompt cancellation, actual reboot persistence, and real TUN/private-network traffic still require separate runtime verification.
 
 The routing fixture uses `SBM_TEST_CORE` (or the installed user core) in a disposable directory with loopback listeners. It verifies TCP by IP and hostname plus UDP DNS: normal rules reject/refuse, Pause succeeds directly, and Start restores the original behavior without changing the core PID. It does not alter the active service or TUN routing.

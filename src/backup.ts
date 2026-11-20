@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { atomicWrite, exists, optionalRead, restoreFile, writeNewFile, type Paths } from './system';
 import { prepareRoutingConfig } from './routing-mode';
 import { Service, errorMessage } from './service';
+import { isWindows } from './platform';
 
 const MAX_FILE = 32 * 1024 * 1024;
 const MAX_TOTAL = 64 * 1024 * 1024;
@@ -90,6 +91,7 @@ async function safeParents(base: string, path: string) {
   catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
 }
 export async function backupConfig(paths: Paths, destination: string): Promise<string> {
+  if (isWindows(paths.kind)) throw new Error('Configuration backup is not supported on Windows yet.');
   destination = resolve(destination);
   if (!relative(paths.base, destination).startsWith(`..${sep}`) && relative(paths.base, destination) !== '..') throw new Error('Backup file must be outside the managed directory.');
   const source = await readFile(paths.config);
@@ -127,6 +129,7 @@ export async function backupConfig(paths: Paths, destination: string): Promise<s
 
 export async function restoreConfig(service: Service, archive: string): Promise<string> {
   const paths = service.paths;
+  if (isWindows(paths.kind)) throw new Error('Configuration restore is not supported on Windows yet.');
   await service.requireCore();
   const zip = resolve(archive);
   const archiveStat = await stat(zip);

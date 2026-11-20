@@ -8,6 +8,7 @@
     "build": "bun scripts/build.mjs",
     "build:app": "bun scripts/build-app.mjs",
     "test": "bun test",
+    "test:source": "bun test test/app.test.ts test/backup.test.ts test/download.test.ts test/manager.test.ts test/platform.test.ts test/routes.test.ts test/routing-mode.test.ts test/storage.test.ts test/vps.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

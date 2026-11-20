@@ -4,6 +4,7 @@ import { isAbsolute, join } from 'node:path';
 import { homedir } from 'node:os';
 import { Paths, SYSTEM_BASE, userDataRoot, atomicWrite, checked, exists, optionalRead, restoreFile, run, withLock } from './system';
 import { Service, errorMessage, plist } from './service';
+import { defaultBootDir, defaultUserRoot, isMacos, isWindows } from './platform';
 
 export type Owner = { uid: number; gid: number };
 export type Registration = Owner & { version: number; base: string };
@@ -37,12 +38,19 @@ export async function invokingOwner(): Promise<Owner & { home: string }> {
 
 export async function managedStorage() {
   const owner = await invokingOwner();
+  // Windows is intentionally single-root and unprivileged: the core, its
+  // configuration, and login startup all belong to the invoking user.
+  if (isWindows()) {
+    const base = defaultUserRoot('windows', owner.home);
+    return { paths: Paths.windows(base, defaultBootDir('windows', owner.home)), owner: { uid: 0, gid: 0 }, legacy: false };
+  }
   const record = await readRegistration();
   const paths = new Paths(record ? record.base : userDataRoot(owner.home), '/Library/LaunchDaemons', undefined, 'system', SYSTEM_BASE);
   return { paths, owner: record ? { uid: record.uid, gid: record.gid } : { uid: owner.uid, gid: owner.gid }, legacy: !record && await exists(SYSTEM_BASE) };
 }
 
 export function requireOwner(owner: Owner) {
+  if (isWindows()) return;
   const uid = process.getuid?.() ?? 0;
   if (uid !== 0 && uid !== owner.uid) throw new Error(`This sbm instance belongs to user ID ${owner.uid}. Run configuration commands as that user.`);
 }
@@ -67,7 +75,7 @@ export async function restoreDataOwner(paths: Paths, owner: Owner): Promise<void
 export async function withDataLock<T>(paths: Paths, owner: Owner, action: () => Promise<T>): Promise<T> {
   return withLock(paths, async () => {
     try { return await action(); }
-    finally { if (process.getuid?.() === 0) await restoreDataOwner(paths, owner); }
+    finally { if (isMacos() && process.getuid?.() === 0) await restoreDataOwner(paths, owner); }
   });
 }
 

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { appendFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs, HELP } from './args';
 import { Paths, run, exists, selfInvocation } from './system';
@@ -8,6 +9,8 @@ import { managedStorage, migrateStorage, registerStorage, requireOwner, withData
 import { statusText } from './status';
 import { manageRoute } from './routes';
 import { backupConfig, restoreConfig } from './backup';
+import { isMacos, isPrivileged, isWindows } from './platform';
+import { WindowsUserHost } from './hosts/windows';
 
 async function elevate(argv: string[]): Promise<number> {
   const invocation = selfInvocation();
@@ -54,10 +57,23 @@ async function main(): Promise<number> {
     await withDataLock(storage.paths, storage.owner, async () => console.log(await activatePreparedInstall(service, resolve(raw[1]))));
     return 0;
   }
+  if (raw[0] === '__run') {
+    if (!isWindows()) throw new Error('The detached launcher is Windows-only.');
+    const storage = await managedStorage();
+    try { await new WindowsUserHost(storage.paths, run).start(); }
+    catch (error) {
+      // The Startup launcher is hidden, so record why sign-in startup failed.
+      try { await appendFile(storage.paths.stderr, `sbm startup launcher: ${errorMessage(error)}\n`); }
+      catch { /* The managed directory may not exist yet. */ }
+      throw error;
+    }
+    return 0;
+  }
   const args = parseArgs(raw);
   if (args.command === 'help') { console.log(HELP); return 0; }
   if (args.command === 'version') { console.log('0.1.0'); return 0; }
-  if (process.platform !== 'darwin' || !['arm64', 'x64'].includes(process.arch)) throw new Error('sbm supports macOS arm64 and x64 only.');
+  if (!isMacos() && !isWindows()) throw new Error('sbm supports macOS and Windows only.');
+  if (!['arm64', 'x64'].includes(process.arch)) throw new Error(`Unsupported architecture: ${process.arch}.`);
   if (args.command === 'install') releaseEndpoint(args.value);
   let storage = await managedStorage();
   let paths = storage.paths;
@@ -68,18 +84,19 @@ async function main(): Promise<number> {
     return 0;
   }
   requireOwner(storage.owner);
-  if (storage.legacy && process.getuid?.() !== 0) {
+  const bootLabel = isWindows() ? 'Start at sign-in' : 'Boot startup';
+  if (storage.legacy && !isPrivileged()) {
     console.log('A one-time administrator authorization is needed to move sbm files into your user Library.');
     console.log('Migration pauses and restarts a running sing-box service and can disconnect remote sessions. Use local access or an independent connection.');
   }
-  if (args.command === 'install' && process.getuid?.() !== 0) {
+  if (args.command === 'install' && !isPrivileged()) {
     return withPreparedInstall(args.value, async directory => {
       if (storage.legacy) return elevate(['__install-prepared', directory]);
       await paths.prepare();
       return activatePreparedAsUser(service, directory, storage.owner, () => elevate(['__install-prepared', directory]));
     });
   }
-  if (storage.legacy && process.getuid?.() !== 0) {
+  if (storage.legacy && !isPrivileged()) {
     const code = await elevate(['__migrate']);
     if (code !== 0) return code;
     storage = await managedStorage(); paths = storage.paths; service = new Service(paths, run);
@@ -93,15 +110,18 @@ async function main(): Promise<number> {
         await withDataLock(paths, storage.owner, async () => console.log(await service.start())); return 0;
       }
     }
-    if (args.command === 'pause' && !(await service.state()).loaded) { console.log('sing-box paused. Boot setting preserved.'); return 0; }
-    if (args.command === 'disable' && !await exists(paths.bootPlist)) { console.log('Boot startup disabled. Current running state unchanged.'); return 0; }
+    if (args.command === 'pause' && !(await service.state()).loaded) { console.log(`sing-box paused. ${bootLabel} preserved.`); return 0; }
+    if (args.command === 'disable' && !await service.bootEnabled()) { console.log(`${bootLabel} disabled. Current running state unchanged.`); return 0; }
   }
   const pauseSetup = args.command === 'pause' && !await service.routingPauseReady();
-  if (pauseSetup) console.log('One-time routing pause setup requires a service restart. Future Pause/Start switches need no administrator password.');
+  if (pauseSetup) console.log(isWindows()
+    ? 'One-time routing pause setup restarts sing-box. Later Pause/Start switches do not restart it.'
+    : 'One-time routing pause setup requires a service restart. Future Pause/Start switches need no administrator password.');
   const protectedAction = ['start', 'enable', 'disable'].includes(args.command) || pauseSetup || args.command === 'config' && args.configAction === 'restore';
-  if (protectedAction && process.getuid?.() !== 0) return elevate(raw);
-  if (process.getuid?.() === 0) await preparePrivileged(service, storage.owner, storage.legacy);
-  else if (!await exists(paths.base)) throw new Error('No saved configuration. Run sbm install and sbm start --config <file> first.');
+  if (protectedAction && !isPrivileged()) return elevate(raw);
+  if (isMacos() && isPrivileged()) await preparePrivileged(service, storage.owner, storage.legacy);
+  else if (args.command !== 'install' && !await exists(paths.base)) throw new Error('No saved configuration. Run sbm install and sbm start --config <file> first.');
+  if (args.command === 'install') await paths.prepare();
   await withDataLock(paths, storage.owner, async () => {
     switch (args.command) {
       case 'install': console.log(await install(service, args.value)); break;
@@ -109,8 +129,8 @@ async function main(): Promise<number> {
       case 'pause':
         if (pauseSetup) await service.prepareRoutingPause();
         await service.pause(); console.log('Paused: all traffic routes directly; sing-box remains running.'); break;
-      case 'enable': await service.enable(); console.log('Boot startup enabled. Current running state unchanged.'); break;
-      case 'disable': await service.disable(); console.log('Boot startup disabled. Current running state unchanged.'); break;
+      case 'enable': await service.enable(); console.log(`${bootLabel} enabled. Current running state unchanged.`); break;
+      case 'disable': await service.disable(); console.log(`${bootLabel} disabled. Current running state unchanged.`); break;
       case 'config':
         if (args.configAction === 'backup') console.log(await backupConfig(paths, args.value!));
         else if (args.configAction === 'restore') console.log(await restoreConfig(service, args.value!));

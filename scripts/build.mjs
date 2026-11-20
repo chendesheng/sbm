@@ -13,7 +13,7 @@ if (process.platform === 'darwin') {
   env.PATH = `/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH || ''}`;
 }
 mkdirSync(dirname(output), { recursive: true });
-const compiler = process.env.SCRIPTC || resolve('node_modules/.bin/scriptc');
+const compiler = process.env.SCRIPTC || resolve('node_modules/scriptc/bin/scriptc.exe');
 const build = spawnSync(compiler, ['build', entry, '--strip', '--no-keep-llvm', '-o', output], { env, stdio: 'inherit' });
 if (build.error) {
   console.error(`Cannot run ScriptC: ${build.error.message}. Install scriptc 0.4.7 or set SCRIPTC to its executable.`);
