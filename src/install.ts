@@ -18,10 +18,12 @@ export type PreparationOptions = {
   onStage?: (stage: string) => void;
 };
 export type Fetcher = (url: string) => Promise<Response>;
-export const fetchRelease: Fetcher = async (url) => fetch(url, {
-  headers: { 'User-Agent': 'sbm/0.1.1', Accept: 'application/vnd.github+json' },
-  signal: AbortSignal.timeout(120_000),
-});
+export const fetchRelease: Fetcher = async (url) => {
+  const headers: Record<string, string> = { 'User-Agent': 'sbm/0.1.1', Accept: 'application/vnd.github+json' };
+  // CI uses a token to stay clear of the unauthenticated API rate limit.
+  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  return fetch(url, { headers, signal: AbortSignal.timeout(120_000) });
+};
 export function releaseEndpoint(version?: string) {
   if (version && !/^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('Invalid version; expected e.g. 1.14.4.');
   return `https://api.github.com/repos/SagerNet/sing-box/releases/${version ? `tags/v${version.replace(/^v/, '')}` : 'latest'}`;

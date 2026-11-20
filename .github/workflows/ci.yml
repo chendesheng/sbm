@@ -72,6 +72,8 @@ jobs:
           retention-days: 1
 
       - name: E2E install and start (macOS)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           config="$RUNNER_TEMP/sbm-smoke.json"
@@ -110,6 +112,8 @@ jobs:
           path: dist
 
       - name: E2E install and start (Windows)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
