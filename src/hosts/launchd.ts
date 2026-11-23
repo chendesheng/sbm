@@ -2,13 +2,15 @@ import { rm, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { Paths, type Runner, atomicWrite, checked, exists } from '../system';
 import type { ServiceHost, ServiceState } from './types';
+import { launchdLogArguments } from './launchd-logs';
 
 export function plist(paths: Paths): string {
   const xml = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
   const text = (s: string) => `<string>${xml(s)}</string>`;
+  const args = launchdLogArguments(paths.stdout, paths.stderr, [paths.core, 'run', '-D', paths.base, '-c', paths.config]);
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>
 <key>Label</key>${text(paths.label)}
-<key>ProgramArguments</key><array>${[paths.core, 'run', '-D', paths.base, '-c', paths.config].map(text).join('')}</array>
+<key>ProgramArguments</key><array>${args.map(text).join('')}</array>
 <key>WorkingDirectory</key>${text(paths.base)}
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
 <key>ThrottleInterval</key><integer>10</integer><key>Umask</key><integer>63</integer>
@@ -31,7 +33,9 @@ export class LaunchdHost implements ServiceHost {
 
   async start(): Promise<void> {
     await mkdir(this.paths.systemBase, { recursive: true, mode: 0o755 });
-    await atomicWrite(this.paths.plist, plist(this.paths));
+    const definition = plist(this.paths);
+    await atomicWrite(this.paths.plist, definition);
+    if (await this.bootEnabled()) await atomicWrite(this.paths.bootPlist, definition, 0o644);
     await checked(this.runner, ['/bin/launchctl', 'enable', this.paths.target]);
     await checked(this.runner, ['/bin/launchctl', 'bootstrap', this.paths.domain, this.paths.plist]);
   }

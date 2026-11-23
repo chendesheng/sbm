@@ -1,10 +1,12 @@
 import { describe, test, expect, afterEach } from 'bun:test';
-import { mkdtemp, mkdir, readFile, writeFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { Paths, type Runner, type Result, run, exists, withLock } from '../src/system';
 import { Service, plist } from '../src/service';
+import { launchdLogArguments } from '../src/hosts/launchd-logs';
 import { parseArgs } from '../src/args';
 import { install, releaseEndpoint, selectAsset, withPreparedInstall, activatePreparedInstall, activatePreparedAsUser, type Fetcher } from '../src/install';
 import type { Downloader } from '../src/download';
@@ -123,9 +125,39 @@ describe('service', () => {
     await writeFile(f.paths.config, '{"log":{"output":"logs/core.log"}}');
     expect(await f.service.configuredLogPath()).toBe(join(f.paths.base, 'logs/core.log'));
   });
-  test('plist quotes paths and launches the core directly', async () => {
+  test('plist quotes paths and includes rotation on service start and at boot', async () => {
     const f = await fixture(); const xml = plist(f.paths);
-    expect(xml).toContain('app &amp; data'); expect(xml).toContain('<string>run</string>'); expect(xml).not.toContain('cli.ts');
+    expect(xml).toContain('app &amp; data'); expect(xml).toContain('<string>run</string>'); expect(xml).toContain('exec &quot;$@&quot;');
+    await mkdir(f.paths.bootDir);
+    await writeFile(f.paths.bootPlist, 'previous launch definition');
+    await f.service.start();
+    expect(await readFile(f.paths.plist, 'utf8')).toBe(xml);
+    expect(await readFile(f.paths.bootPlist, 'utf8')).toBe(xml);
+  });
+  test.skipIf(process.platform !== 'darwin')('rotation preserves the append descriptor, keeps two private archives and leaves small logs in place', async () => {
+    const { paths } = await fixture();
+    const [shell, flag, , , rotate] = launchdLogArguments(paths.stdout, paths.stderr, []);
+    const writer = await open(paths.stderr, 'a');
+    const inode = (await writer.stat()).ino;
+    try {
+      await writeFile(paths.stdout, 'small log');
+      const block = Buffer.alloc(20 * 1024 * 1024);
+      for (const value of ['first', 'second', 'third']) {
+        block.write(value.padEnd(8));
+        await writer.writeFile(block);
+        const result = await run([shell, flag, rotate, 'sbm-log-rotation', paths.stdout, paths.stderr]);
+        expect(result.code).toBe(0);
+        expect((await stat(paths.stderr)).size).toBe(0);
+        expect((await stat(paths.stderr)).ino).toBe(inode);
+      }
+      await writer.writeFile('still appending');
+      expect(await readFile(paths.stderr, 'utf8')).toBe('still appending');
+      expect(await readFile(paths.stdout, 'utf8')).toBe('small log');
+      expect(await exists(`${paths.stdout}.1.gz`)).toBe(false);
+      expect(gunzipSync(await readFile(`${paths.stderr}.1.gz`)).subarray(0, 5).toString()).toBe('third');
+      expect(gunzipSync(await readFile(`${paths.stderr}.2.gz`)).subarray(0, 6).toString()).toBe('second');
+      expect((await stat(`${paths.stderr}.1.gz`)).mode & 0o777).toBe(0o600);
+    } finally { await writer.close(); }
   });
 });
 describe('installation', () => {
